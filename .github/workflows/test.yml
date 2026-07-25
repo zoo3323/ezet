@@ -1,0 +1,29 @@
+name: test
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install test dependencies (Ubuntu)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y expect shellcheck
+      - name: Install test dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          command -v expect >/dev/null 2>&1 || brew install expect
+          command -v shellcheck >/dev/null 2>&1 || brew install shellcheck
+      - name: Run tests
+        run: ./tests/run.sh

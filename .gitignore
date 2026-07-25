@@ -1,0 +1,8 @@
+# 임시/스크래치
+*.tmp
+*.log
+.DS_Store
+
+# 로컬 상태(사용자 환경별)
+*.etm-backup
+*.ezet-backup
