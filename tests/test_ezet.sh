@@ -228,9 +228,14 @@ case "${EZET_FAKE_SSH_MODE:-sessions}" in
       '__DT_SESSION__|alpha|1||1699999900|bash|/home/user' \
       '__DT_SESSION__|bravo|1||1699999900|bash|/home/user'
     ;;
+  notmux)
+    printf "%s\n" "__DT_CONNECTED__" "__DT_NO_TMUX__"
+    ;;
   windows)
-    printf '%s\n' "'printf' is not recognized as an internal or external command" >&2
-    exit 127
+    # 실제 Windows cmd 동작: 여러 줄 중 첫 줄만 실행하고 오류를 내지만 종료코드는 0.
+    # (오류 문구는 OS 언어로 현지화되므로 문자열이 아니라 "마커 없음"으로 판별해야 한다.)
+    printf '%s\n' "'valid_tmux_path' is not recognized as an internal or external command" >&2
+    exit 0
     ;;
   timeout)
     # 실패한 일반 SSH 직후 ezet이 자동 재조회하면 동일한 네트워크 지연이 한 번 더 생긴다.
@@ -287,6 +292,32 @@ expect {
 send "q"
 expect eof
 EXPECT
+
+# 실패 사유는 케이스별로 구분해 표기하고 조치 안내를 함께 보여줘야 한다.
+#   비POSIX 셸(Windows) vs 원격에 tmux 없음
+for mode_case in "windows:Windows 등 비POSIX 셸" "notmux:원격에 tmux 없음" "timeout:연결 실패 · 응답 없음"; do
+  mode=${mode_case%%:*}; want=${mode_case#*:}
+  # 사유 분류만 확인하므로 모드별로 빈 로그를 써서 재시도 지연을 피한다.
+  case_log="$tmp/fake-ssh.$mode.log"; : > "$case_log"
+  out=$(printf '\n' | HOME="$tmp" PATH="$EZET_FAKE_PATH" NO_COLOR=1 EZET_NO_ANIMATION=1 \
+    EZET_FAKE_SSH_MODE="$mode" EZET_FAKE_SSH_LOG="$case_log" "$EZET_BIN" host-b 2>&1)
+  case "$out" in
+    *"$want"*) ;;
+    *) printf 'expected fetch failure label %s for mode %s\n' "$want" "$mode" >&2; exit 90 ;;
+  esac
+  case "$mode" in
+    timeout) hint_want="확인하세요" ;;
+    *)       hint_want="SSH 셸로 접속" ;;
+  esac
+  case "$out" in
+    *"$hint_want"*) ;;
+    *) printf 'expected actionable hint for mode %s\n' "$mode" >&2; exit 91 ;;
+  esac
+  case "$out" in
+    *"tmux 사용 불가"*) ;;
+    *) printf 'expected korean unavailable label for mode %s\n' "$mode" >&2; exit 92 ;;
+  esac
+done
 
 # Windows cmd 응답처럼 tmux 조회 자체가 실패해도 종료하지 않고 SSH SHELL을 선택할 수 있어야 한다.
 printf '' > "$fake_ssh_log"

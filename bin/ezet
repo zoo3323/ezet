@@ -13,7 +13,7 @@
 # 환경변수 EZET_DRYRUN=1 이면 실제 접속 대신 대상만 출력(테스트용).
 set -euo pipefail
 
-EZET_VERSION="0.1.1"
+EZET_VERSION="0.1.2"
 
 # ── 전용 SSH config 모듈 ──────────────────────────────────────────
 # 공개 인터페이스: config_ensure, config_include_present
@@ -382,8 +382,9 @@ box_line_wide_sel() {
   printf '%s│%s%s› %s%*s%s %s│%s\n' "$BD" "$RESET" "$SEL" "$rendered" "$pad" "" "$RESET" "$BD" "$RESET"
 }
 row_kv() {
+  # 값에 한글이 섞일 수 있으므로(예: VIA "SSH (tmux 사용 불가)") 표시 폭 기준으로 그린다.
   local lbl; printf -v lbl '%-4s' "$1"
-  box_line "${lbl}  $2" "${DIM}${lbl}${RESET}  ${3:-}$2${RESET}"
+  box_line_wide "${lbl}  $2" "${DIM}${lbl}${RESET}  ${3:-}$2${RESET}"
 }
 
 fmt_idle() {
@@ -1231,12 +1232,13 @@ pick_host_text() {
 }
 
 # ── 세션 조회/표시 ───────────────────────────────────────────────
-# 전역: now names[] wins[] atts[] acts[] cmds[] paths[] count, FETCH_ERROR/REMOTE_TMUX
-FETCH_ERROR=""; REMOTE_TMUX=""
+# 전역: now names[] wins[] atts[] acts[] cmds[] paths[] count, FETCH_ERROR/FETCH_HINT/REMOTE_TMUX
+# FETCH_ERROR: 표 안에 넣을 짧은 사유, FETCH_HINT: 표 아래에 띄울 조치 안내
+FETCH_ERROR=""; FETCH_HINT=""; REMOTE_TMUX=""
 fetch_sessions() {
   local list_raw line payload name windows attached activity cmd path tmux_path
   local connected=0 no_tmux=0 tmux_exec_failed=0 bad_tmux_path=0
-  FETCH_ERROR=""; REMOTE_TMUX=""
+  FETCH_ERROR=""; FETCH_HINT=""; REMOTE_TMUX=""
   # -n: ssh 가 로컬 stdin 을 소비하지 못하게(뒤의 세션 선택 입력이 씹힘 방지).
   if ! list_raw=$(ssh -n "${SSH_CONNECT_OPTIONS[@]}" "$host" '
     valid_tmux_path() {
@@ -1281,7 +1283,27 @@ fetch_sessions() {
     printf "__DT_NOW__=%s\n" "$(date +%s)"
     "$tmux_bin" list-sessions -F "__DT_SESSION__|#{session_name}|#{session_windows}|#{?session_attached,attached,}|#{session_activity}|#{pane_current_command}|#{pane_current_path}" 2>/dev/null || true
   ' 2>&1); then
-    FETCH_ERROR="CONNECTION FAILED"
+    # SSH 자체가 실패했다. ssh 진단 메시지로 하위 원인을 구분한다(영문 고정 메시지).
+    case "$list_raw" in
+      *"Operation timed out"*|*"Connection timed out"*|*"timed out"*)
+        FETCH_ERROR="연결 실패 · 응답 없음"
+        FETCH_HINT="제한시간 안에 응답이 없습니다. 호스트가 켜져 있는지, 네트워크·VPN 을 확인하세요." ;;
+      *"Connection refused"*)
+        FETCH_ERROR="연결 실패 · 거부됨"
+        FETCH_HINT="원격에서 연결을 거부했습니다. SSH 데몬 실행 여부와 포트를 확인하세요." ;;
+      *"Permission denied"*|*"Too many authentication failures"*)
+        FETCH_ERROR="연결 실패 · 인증"
+        FETCH_HINT="인증에 실패했습니다. 사용자명과 SSH 키를 확인하세요." ;;
+      *"Could not resolve"*|*"Name or service not known"*|*"nodename nor servname"*)
+        FETCH_ERROR="연결 실패 · 주소"
+        FETCH_HINT="호스트 주소를 찾을 수 없습니다. HostName 을 확인하세요(e 로 수정)." ;;
+      *"Host key verification failed"*)
+        FETCH_ERROR="연결 실패 · 호스트 키"
+        FETCH_HINT="호스트 키 검증에 실패했습니다. known_hosts 항목을 확인하세요." ;;
+      *)
+        FETCH_ERROR="연결 실패"
+        FETCH_HINT="SSH 연결이 되지 않습니다. 주소·포트·키를 확인하세요." ;;
+    esac
     now=0; names=(); wins=(); atts=(); acts=(); cmds=(); paths=(); count=0
     return 1
   fi
@@ -1310,19 +1332,26 @@ fetch_sessions() {
   fi
   count=${#names[@]}
   if [ "$connected" -ne 1 ]; then
-    FETCH_ERROR="INVALID HOST RESPONSE"
+    # SSH 는 성공했는데 POSIX 스크립트의 마커가 오지 않았다 = 원격 셸이 POSIX 가 아니다.
+    # (Windows cmd 는 여러 줄 중 첫 줄만 실행하고, 오류 메시지는 OS 언어로 현지화되므로
+    #  문자열 매칭 대신 이 동작 차이로 판별한다.)
+    FETCH_ERROR="Windows 등 비POSIX 셸"
+    FETCH_HINT="원격 셸이 POSIX 스크립트를 실행하지 못했습니다. tmux 대신 SSH 셸로 접속하세요."
     return 1
   fi
   if [ "$no_tmux" -eq 1 ]; then
-    FETCH_ERROR="TMUX NOT FOUND"
+    FETCH_ERROR="원격에 tmux 없음"
+    FETCH_HINT="원격에 tmux 가 설치돼 있지 않습니다. 설치하거나 SSH 셸로 접속하세요."
     return 1
   fi
   if [ "$tmux_exec_failed" -eq 1 ]; then
-    FETCH_ERROR="TMUX EXEC FAILED"
+    FETCH_ERROR="tmux 실행 실패"
+    FETCH_HINT="원격에서 tmux 를 찾았지만 실행하지 못했습니다. 원격에서 tmux -V 를 확인하세요."
     return 1
   fi
   if [ "$bad_tmux_path" -eq 1 ] || [ -z "$REMOTE_TMUX" ]; then
-    FETCH_ERROR="INVALID TMUX PATH"
+    FETCH_ERROR="tmux 경로 확인 불가"
+    FETCH_HINT="원격 tmux 경로를 신뢰할 수 없어 사용하지 않습니다. SSH 셸로 접속하세요."
     return 1
   fi
   return 0
@@ -1402,7 +1431,7 @@ build_session_rows() {
 # 세션 대시보드 그리기. tmux 상태와 무관하게 마지막 선택 항목은 항상 SSH SHELL이다.
 TMUX_AVAILABLE=0
 draw_sessions() {
-  local value_w=$((INNER_W - 6)) info pos orig rows=0
+  local value_w=$((INNER_W - 6)) info pos orig rows=0 hint_rows=0
   [ "$value_w" -lt 8 ] && value_w=8
   {
     echo
@@ -1417,9 +1446,10 @@ draw_sessions() {
         info="no active tmux sessions"
         box_line "$info" "${DIM}${info}${RESET}"
       else
-        info="tmux unavailable · ${FETCH_ERROR:-unknown error}"
-        info="$(trunc "$info" "$INNER_W")"
-        box_line "$info" "${RED}${info}${RESET}"
+        # 한글이 섞이므로 표시 폭 기준으로 그린다(문자수 기준이면 오른쪽 테두리가 밀린다).
+        info="tmux 사용 불가 · ${FETCH_ERROR:-알 수 없는 오류}"
+        while [ "$(disp_width "$info")" -gt "$INNER_W" ]; do info="${info%?}"; done
+        box_line_wide "$info" "${RED}${info}${RESET}"
       fi
       rows=$((rows + 1))
     fi
@@ -1445,11 +1475,16 @@ draw_sessions() {
     fi
     box_bot
     echo
+    # 실패 사유별 조치 안내(박스 밖이라 폭 제약 없음)
+    if [ "$TMUX_AVAILABLE" -eq 0 ] && [ -n "$FETCH_HINT" ] && [ "$FILTER_ON" -eq 0 ]; then
+      printf '  %s%s%s\n\n' "$DIM" "$FETCH_HINT" "$RESET"
+      hint_rows=2
+    fi
     if [ "$FILTER_ON" -eq 1 ]; then
       printf '  %s검색%s %s%s%s%s  ·  %sEnter%s 선택 · %sEsc%s 취소\n' \
         "$B" "$RESET" "$CY" "$FILTER_Q" "$RESET" "${DIM}▌${RESET}" "$B" "$RESET" "$B" "$RESET"
     elif [ "$TMUX_AVAILABLE" -eq 0 ]; then
-      printf '  %sEnter/s%s 일반 SSH · %s/%s 검색 · %sb/←%s 뒤로 · %sq%s 종료\n' \
+      printf '  %sEnter/s%s SSH 셸 · %s/%s 검색 · %sb/←%s 뒤로 · %sq%s 종료\n' \
         "$B" "$RESET" "$B" "$RESET" "$B" "$RESET" "$B" "$RESET"
     elif [ "$count" -eq 0 ]; then
       printf '  %sEnter/s%s 일반 SSH · %sn%s 새 tmux 세션 · %s/%s 검색 · %sb/←%s 뒤로 · %sq%s 종료\n' \
@@ -1459,7 +1494,7 @@ draw_sessions() {
         "$B" "$RESET" "$B" "$RESET" "$B" "$RESET" "$B" "$RESET" "$B" "$RESET" "$B" "$RESET" "$B" "$RESET" "$B" "$RESET"
     fi
   } >&2
-  DREW_LINES=$(( 7 + rows + 3 ))
+  DREW_LINES=$(( 7 + rows + 3 + hint_rows ))
 }
 
 refresh_sessions() {
@@ -1467,10 +1502,13 @@ refresh_sessions() {
   activity_start "$label 중" "$host · 최대 ${EZET_SSH_CONNECT_TIMEOUT}초"
   if fetch_sessions; then
     TMUX_AVAILABLE=1
+    via="$VIA_BASE"
     activity_stop success "$label 완료" "${count}개 세션"
   else
     TMUX_AVAILABLE=0
-    activity_stop warning "$label 불가" "${FETCH_ERROR:-unknown error} · SSH SHELL 사용 가능"
+    # tmux 를 못 쓰는 상태에서 VIA 가 Eternal Terminal 을 안내하면 오해를 준다(실제로는 SSH 셸만 가능).
+    via="SSH (tmux 사용 불가)"
+    activity_stop warning "$label 불가" "${FETCH_ERROR:-알 수 없는 오류}"
   fi
   build_session_rows
 }
@@ -1505,7 +1543,8 @@ if [ "$#" -eq 2 ]; then
 fi
 
 addr=$(resolve_address) || addr="(unresolved)"
-if [ "$(connection_transport "$host")" = et ]; then via="tmux: Eternal Terminal · shell: SSH"; else via="SSH"; fi
+if [ "$(connection_transport "$host")" = et ]; then VIA_BASE="tmux: Eternal Terminal · shell: SSH"; else VIA_BASE="SSH"; fi
+via="$VIA_BASE"
 
 refresh_sessions 'tmux 세션 조회'
 
@@ -1609,9 +1648,9 @@ else
     if [ "$TMUX_AVAILABLE" -eq 1 ]; then
       box_line "no active tmux sessions" "${DIM}no active tmux sessions${RESET}"
     else
-      info="tmux unavailable · ${FETCH_ERROR:-unknown error}"
-      info="$(trunc "$info" "$INNER_W")"
-      box_line "$info" "${RED}${info}${RESET}"
+      info="tmux 사용 불가 · ${FETCH_ERROR:-알 수 없는 오류}"
+      while [ "$(disp_width "$info")" -gt "$INNER_W" ]; do info="${info%?}"; done
+      box_line_wide "$info" "${RED}${info}${RESET}"
     fi
   else
     i=0
@@ -1621,8 +1660,11 @@ else
   box_line "$SSH_ROW_PLAIN" "$SSH_ROW_REND"
   box_bot
   echo
+  if [ "$TMUX_AVAILABLE" -eq 0 ] && [ -n "$FETCH_HINT" ]; then
+    printf '  %s\n\n' "$FETCH_HINT"
+  fi
   if [ "$TMUX_AVAILABLE" -eq 0 ]; then
-    printf '  선택 (s=일반 SSH · Enter=취소): '
+    printf '  선택 (s=SSH 셸 · Enter=취소): '
   elif [ "$count" -eq 0 ]; then
     printf '  새 세션 이름 (s=일반 SSH · Enter=취소): '
   else
