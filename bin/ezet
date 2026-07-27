@@ -13,7 +13,7 @@
 # 환경변수 EZET_DRYRUN=1 이면 실제 접속 대신 대상만 출력(테스트용).
 set -euo pipefail
 
-EZET_VERSION="0.1.2"
+EZET_VERSION="0.1.3"
 
 # ── 전용 SSH config 모듈 ──────────────────────────────────────────
 # 공개 인터페이스: config_ensure, config_include_present
@@ -49,8 +49,9 @@ setup_multiplexing() {
       fi ;;
     *) return 0 ;;
   esac
-  # 유닉스 소켓 경로 길이 한계(macOS ~104, Linux ~108). %C 확장(약 40자)과 여유를 두고 100 미만만 허용.
-  [ "$(( ${#EZET_CONTROL_DIR} + 42 ))" -ge 100 ] && return 0
+  # 유닉스 소켓 경로 길이 한계(macOS ~104, Linux ~108). %C 확장(64자) 에 더해 OpenSSH 가
+  # 먼저 만드는 임시 리스너(<path>.XXXXXXXXXXXXXXXX)까지 들어가야 하므로 넉넉히 잡는다.
+  [ "$(( ${#EZET_CONTROL_DIR} + 82 ))" -ge 100 ] && return 0
   mkdir -p "$EZET_CONTROL_DIR" 2>/dev/null || return 0
   chmod 700 "$EZET_CONTROL_DIR" 2>/dev/null || true
   [ -d "$EZET_CONTROL_DIR" ] && [ -w "$EZET_CONTROL_DIR" ] || return 0
@@ -362,13 +363,19 @@ box_line_sel() {                  # 선택 행: 어두운 회색 배경 + 원래
   [ "$pad" -gt 0 ] && pad=$((pad - 1))
   printf '%s│%s%s› %s%*s%s %s│%s\n' "$BD" "$RESET" "$SEL" "$rendered" "$pad" "" "$RESET" "$BD" "$RESET"
 }
-# 한글(폭 2)이 섞인 내용의 표시 폭. ASCII 만 있으면 문자수와 같다.
-# (문자수+바이트수)/2 = ASCII·3바이트 한글만 있을 때 정확(가운뎃점/화살표 등 폭1 멀티바이트는 넣지 않는다).
+# 표시 폭(터미널 칸 수). 3바이트 이상 문자(한글·CJK)는 2칸, ASCII 와 2바이트 문자(·)는 1칸.
+# 문자수와 바이트수만으로 계산해 서브프로세스를 쓰지 않는다(매 프레임 호출되므로 속도가 중요).
+#   bytes = ascii + 2*mid + 3*wide,  chars = ascii + mid + wide  ⇒  wide = (bytes-chars-mid)/2
 disp_width() {
-  local s="$1" chars bytes
+  local s="$1" chars bytes mid tmp saved had
   chars=${#s}
-  bytes=$(LC_ALL=C printf '%s' "$s" | wc -c)
-  printf '%s' $(( (chars + bytes) / 2 ))
+  tmp="${s//·/}"; mid=$(( chars - ${#tmp} ))
+  had=0; [ -n "${LC_ALL+x}" ] && { had=1; saved="$LC_ALL"; }
+  LC_ALL=C; bytes=${#s}
+  if [ "$had" -eq 1 ]; then LC_ALL="$saved"; else unset LC_ALL; fi
+  local wide=$(( (bytes - chars - mid) / 2 ))
+  [ "$wide" -lt 0 ] && wide=0
+  printf '%s' $(( chars + wide ))
 }
 box_line_wide() {                 # 한글 포함 줄용: 표시 폭 기준으로 패딩
   local plain="$1" rendered="$2" pad
@@ -397,8 +404,17 @@ fmt_idle() {
   fi
 }
 trunc() {
-  local s="$1" n="$2"
-  if [ "${#s}" -le "$n" ]; then printf '%s' "$s"; else printf '%s~' "${s:0:n-1}"; fi
+  local s="$1" n="$2" out="" ch w=0 cw
+  # 문자수가 아니라 표시 폭 기준으로 자른다(한글 호스트명이 박스를 넘치지 않도록).
+  if [ "${#s}" -le "$n" ] && [ "$(disp_width "$s")" -le "$n" ]; then printf '%s' "$s"; return; fi
+  local i
+  for (( i=0; i<${#s}; i++ )); do
+    ch="${s:i:1}"
+    cw=1; [ "$(disp_width "$ch")" -eq 2 ] && cw=2
+    if [ "$((w + cw))" -gt "$((n - 1))" ]; then break; fi
+    out="$out$ch"; w=$((w + cw))
+  done
+  printf '%s~' "$out"
 }
 # 실제 터미널 가로 폭. stty(ioctl 실제 창 크기) 우선 → COLUMNS → tput → 기본값.
 term_cols() {
@@ -1106,16 +1122,16 @@ draw_hosts() {
     echo
     box_top
     if [ "$FILTER_ON" -eq 1 ]; then hdr="SSH HOSTS ($total/$HN)"; else hdr="SSH HOSTS ($HN)"; fi
-    box_line "$hdr" "${B}${hdr}${RESET}"
+    box_line_wide "$hdr" "${B}${hdr}${RESET}"
     box_mid
     if [ "$total" -eq 0 ]; then
-      box_line "일치 항목 없음" "${DIM}일치 항목 없음${RESET}"
+      box_line_wide "일치 항목 없음" "${DIM}일치 항목 없음${RESET}"
       rows=1
     else
       for pos in "${!VIS[@]}"; do
         orig="${VIS[$pos]}"
-        if [ "$pos" -eq "$CUR" ]; then box_line_sel "${HROW_PLAIN[$orig]}" "${HREND[$orig]}"
-        else box_line "${HROW_PLAIN[$orig]}" "${HREND[$orig]}"; fi
+        if [ "$pos" -eq "$CUR" ]; then box_line_wide_sel "${HROW_PLAIN[$orig]}" "${HREND[$orig]}"
+        else box_line_wide "${HROW_PLAIN[$orig]}" "${HREND[$orig]}"; fi
         rows=$((rows + 1))
       done
     fi
@@ -1214,11 +1230,11 @@ pick_host_text() {
   addr_w=$((width - name_w - 3)); [ "$addr_w" -lt 8 ] && addr_w=8
   {
     echo; box_top
-    box_line "SSH HOSTS ($n)" "${B}SSH HOSTS ($n)${RESET}"; box_mid
+    box_line_wide "SSH HOSTS ($n)" "${B}SSH HOSTS ($n)${RESET}"; box_mid
     for h in "${hosts[@]}"; do
       a="$(resolve_address "$h" || true)"; [ -z "$a" ] && a="?"; a="$(trunc "$a" "$addr_w")"
       printf -v hn "%-${name_w}s" "$(trunc "$h" "$name_w")"
-      box_line "${hn}  ${a}" "${CY}${B}${hn}${RESET}  ${DIM}${a}${RESET}"
+      box_line_wide "${hn}  ${a}" "${CY}${B}${hn}${RESET}  ${DIM}${a}${RESET}"
     done
     box_bot; echo
     printf '  호스트 이름 선택 (Enter=%s): ' "$([ "$n" -eq 1 ] && echo "${hosts[0]}" || echo 취소)"
@@ -1236,7 +1252,7 @@ pick_host_text() {
 # FETCH_ERROR: 표 안에 넣을 짧은 사유, FETCH_HINT: 표 아래에 띄울 조치 안내
 FETCH_ERROR=""; FETCH_HINT=""; REMOTE_TMUX=""
 fetch_sessions() {
-  local list_raw line payload name windows attached activity cmd path tmux_path
+  local list_raw line payload rest name windows attached activity cmd path tmux_path
   local connected=0 no_tmux=0 tmux_exec_failed=0 bad_tmux_path=0
   FETCH_ERROR=""; FETCH_HINT=""; REMOTE_TMUX=""
   # -n: ssh 가 로컬 stdin 을 소비하지 못하게(뒤의 세션 선택 입력이 씹힘 방지).
@@ -1320,11 +1336,29 @@ fetch_sessions() {
           if valid_remote_tmux_path "$tmux_path"; then REMOTE_TMUX="$tmux_path"
           else bad_tmux_path=1
           fi ;;
-        __DT_NOW__=*) now="${line#__DT_NOW__=}" ;;
+        __DT_NOW__=*)
+          now="${line#__DT_NOW__=}"
+          # 원격 값은 산술식에 들어가므로 반드시 숫자만 허용한다(아래 세션 필드도 동일).
+          case "$now" in ''|*[!0-9]*) now=0 ;; esac ;;
         "__DT_SESSION__|"*)
           payload="${line#__DT_SESSION__|}"
-          IFS='|' read -r name windows attached activity cmd path <<< "$payload"
+          # 세션명에는 '|' 가 들어갈 수 있어 앞에서부터 자르면 필드가 밀린다.
+          # 뒤에서부터 고정 5개 필드를 떼어내고 남은 전부를 이름으로 본다.
+          case "$payload" in *'|'*'|'*'|'*'|'*'|'*) ;; *) continue ;; esac
+          rest="$payload"
+          path="${rest##*|}";     rest="${rest%|*}"
+          cmd="${rest##*|}";      rest="${rest%|*}"
+          activity="${rest##*|}"; rest="${rest%|*}"
+          attached="${rest##*|}"; rest="${rest%|*}"
+          windows="${rest##*|}";  rest="${rest%|*}"
+          name="$rest"
           [ -z "$name" ] && continue
+          # 숫자 필드 검증: 검증 없이 $(( )) 에 넣으면 원격이 로컬 명령을 실행할 수 있다.
+          case "$windows"  in ''|*[!0-9]*) windows=0 ;; esac
+          case "$activity" in ''|*[!0-9]*) activity=0 ;; esac
+          [ "$attached" = attached ] || attached=""
+          # 표시용 문자열의 제어문자(ANSI 이스케이프 등)를 제거해 화면 조작을 막는다.
+          name="${name//[[:cntrl:]]/}"; cmd="${cmd//[[:cntrl:]]/}"; path="${path//[[:cntrl:]]/}"
           names+=("$name"); wins+=("$windows"); atts+=("$attached")
           acts+=("$activity"); cmds+=("$cmd"); paths+=("$path") ;;
       esac
@@ -1392,7 +1426,8 @@ build_session_rows() {
   k=0
   while [ "$k" -lt "$count" ]; do
     if [ -n "${atts[$k]}" ]; then st='attached'; sc="$GR"; else st='detached'; sc="$DIM"; fi
-    if [ "$now" -gt 0 ]; then idle_s=$(( now - ${acts[$k]} )); else idle_s=-1; fi
+    # acts[] 는 파싱 단계에서 숫자만 통과시켰다(0 = 값 없음/비정상 → 유휴시간 미상).
+    if [ "$now" -gt 0 ] && [ "${acts[$k]}" -gt 0 ]; then idle_s=$(( now - ${acts[$k]} )); else idle_s=-1; fi
     if   [ "$idle_s" -lt 0 ];     then ic="$DIM"
     elif [ "$idle_s" -lt 3600 ];  then ic="$GR"
     elif [ "$idle_s" -lt 86400 ]; then ic="$YE"
@@ -1440,11 +1475,11 @@ draw_sessions() {
     row_kv 'ADDR' "$(trunc "$addr" "$value_w")" "$B"
     row_kv 'VIA'  "$(trunc "$via" "$value_w")" "$YE"
     box_mid
-    box_line "$TH_PLAIN" "${DIM}${TH_PLAIN}${RESET}"
+    box_line_wide "$TH_PLAIN" "${DIM}${TH_PLAIN}${RESET}"
     if [ "$count" -eq 0 ]; then
       if [ "$TMUX_AVAILABLE" -eq 1 ]; then
         info="no active tmux sessions"
-        box_line "$info" "${DIM}${info}${RESET}"
+        box_line_wide "$info" "${DIM}${info}${RESET}"
       else
         # 한글이 섞이므로 표시 폭 기준으로 그린다(문자수 기준이면 오른쪽 테두리가 밀린다).
         info="tmux 사용 불가 · ${FETCH_ERROR:-알 수 없는 오류}"
@@ -1463,11 +1498,11 @@ draw_sessions() {
         if [ "$orig" -ge "$count" ]; then
           # tmux 세션과 시각적으로 분리한다: 위에 세션이 하나라도 있으면 구분선을 넣는다.
           if [ "$sess_shown" -gt 0 ]; then box_mid; rows=$((rows + 1)); fi
-          if [ "$pos" -eq "$CUR" ]; then box_line_sel "$SSH_ROW_PLAIN" "$SSH_ROW_REND"
-          else box_line "$SSH_ROW_PLAIN" "$SSH_ROW_REND"; fi
+          if [ "$pos" -eq "$CUR" ]; then box_line_wide_sel "$SSH_ROW_PLAIN" "$SSH_ROW_REND"
+          else box_line_wide "$SSH_ROW_PLAIN" "$SSH_ROW_REND"; fi
         else
-          if [ "$pos" -eq "$CUR" ]; then box_line_sel "${ROW_PLAIN[$orig]}" "${ROW_REND[$orig]}"
-          else box_line "${ROW_PLAIN[$orig]}" "${ROW_REND[$orig]}"; fi
+          if [ "$pos" -eq "$CUR" ]; then box_line_wide_sel "${ROW_PLAIN[$orig]}" "${ROW_REND[$orig]}"
+          else box_line_wide "${ROW_PLAIN[$orig]}" "${ROW_REND[$orig]}"; fi
           sess_shown=$((sess_shown + 1))
         fi
         rows=$((rows + 1))
@@ -1643,10 +1678,10 @@ else
   row_kv 'ADDR' "$(trunc "$addr" "$value_w")" "$B"
   row_kv 'VIA'  "$(trunc "$via" "$value_w")" "$YE"
   box_mid
-  box_line "$TH_PLAIN" "${DIM}${TH_PLAIN}${RESET}"
+  box_line_wide "$TH_PLAIN" "${DIM}${TH_PLAIN}${RESET}"
   if [ "$count" -eq 0 ]; then
     if [ "$TMUX_AVAILABLE" -eq 1 ]; then
-      box_line "no active tmux sessions" "${DIM}no active tmux sessions${RESET}"
+      box_line_wide "no active tmux sessions" "${DIM}no active tmux sessions${RESET}"
     else
       info="tmux 사용 불가 · ${FETCH_ERROR:-알 수 없는 오류}"
       while [ "$(disp_width "$info")" -gt "$INNER_W" ]; do info="${info%?}"; done
@@ -1654,10 +1689,10 @@ else
     fi
   else
     i=0
-    while [ "$i" -lt "$count" ]; do box_line "${ROW_PLAIN[$i]}" "${ROW_REND[$i]}"; i=$((i + 1)); done
+    while [ "$i" -lt "$count" ]; do box_line_wide "${ROW_PLAIN[$i]}" "${ROW_REND[$i]}"; i=$((i + 1)); done
     box_mid
   fi
-  box_line "$SSH_ROW_PLAIN" "$SSH_ROW_REND"
+  box_line_wide "$SSH_ROW_PLAIN" "$SSH_ROW_REND"
   box_bot
   echo
   if [ "$TMUX_AVAILABLE" -eq 0 ] && [ -n "$FETCH_HINT" ]; then

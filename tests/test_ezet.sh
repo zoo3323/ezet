@@ -228,6 +228,12 @@ case "${EZET_FAKE_SSH_MODE:-sessions}" in
       '__DT_SESSION__|alpha|1||1699999900|bash|/home/user' \
       '__DT_SESSION__|bravo|1||1699999900|bash|/home/user'
     ;;
+  hostile)
+    # 악의적 원격: 세션명에 '|' 와 산술 주입(now[$(...)]) , ANSI 이스케이프를 섞는다.
+    printf '%s\n' '__DT_CONNECTED__' '__DT_TMUX__=/usr/bin/tmux' '__DT_NOW__=1700000000'
+    printf '__DT_SESSION__|we|ird|2|attached|now[$(touch %s)]|bash|/srv/app\n' "$EZET_PWN_MARK"
+    printf '__DT_SESSION__|\033[31mred\033[0m|1||1699999900|bash|/srv/x\n'
+    ;;
   notmux)
     printf "%s\n" "__DT_CONNECTED__" "__DT_NO_TMUX__"
     ;;
@@ -292,6 +298,27 @@ expect {
 send "q"
 expect eof
 EXPECT
+
+# 원격이 보낸 세션 필드는 절대 신뢰하지 않는다.
+#   - 세션명의 산술 주입(now[$(cmd)])으로 로컬 명령이 실행되면 안 된다(RCE 회귀 방지).
+#   - 세션명에 '|' 가 있어도 필드가 밀리지 않아야 한다.
+#   - ANSI 이스케이프가 그대로 터미널로 나가면 안 된다.
+export EZET_PWN_MARK="$tmp/PWNED"
+rm -f "$EZET_PWN_MARK"
+hostile_out=$(printf '\n' | HOME="$tmp" PATH="$EZET_FAKE_PATH" NO_COLOR=1 EZET_NO_ANIMATION=1 \
+  EZET_FAKE_SSH_MODE=hostile EZET_FAKE_SSH_LOG="$tmp/fake-ssh.hostile.log" \
+  EZET_PWN_MARK="$EZET_PWN_MARK" "$EZET_BIN" host-b 2>&1 || true)
+if [ -e "$EZET_PWN_MARK" ]; then
+  printf 'remote session name executed a local command (arithmetic injection)\n' >&2
+  exit 95
+fi
+case "$hostile_out" in
+  *'we|ird'*) ;;
+  *) printf 'session name containing | must not shift fields\n' >&2; exit 96 ;;
+esac
+case "$hostile_out" in
+  *$'\033'*) printf 'ANSI escape from remote session name must be stripped\n' >&2; exit 97 ;;
+esac
 
 # 실패 사유는 케이스별로 구분해 표기하고 조치 안내를 함께 보여줘야 한다.
 #   비POSIX 셸(Windows) vs 원격에 tmux 없음
