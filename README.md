@@ -130,19 +130,10 @@ ezet --help
 
 ## SSH 설정
 
-호스트는 `~/.ssh/config.d/ezet` 에 저장되고, 기본 설정에는 Include 한 줄만 추가됩니다.
+ezet 이 추가하는 호스트는 `~/.ssh/config.d/ezet` 에만 저장되고, 기존 `~/.ssh/config` 에는 `Include` 한 줄만 덧붙습니다(수정 전 `~/.ssh/config.ezet-backup` 백업 생성). 직접 정의해 둔 Host 도 목록에 흐리게 표시되며 접속만 가능하고 건드리지 않습니다.
 
-```sshconfig
-# ~/.ssh/config
-Include "~/.ssh/config.d/ezet"
-```
-
-- 최초 실행 시 파일(`600`)과 디렉터리(`700`)를 생성하고, 기존 config가 있으면 `~/.ssh/config.ezet-backup` 을 한 번 만듭니다.
-- `~/.ssh/config` 에 직접 정의한 Host도 목록에 흐리게 표시되며, 접속만 가능하고 수정·삭제하지 않습니다. 매칭 패턴(`*` `?` `!` `[ ]`)은 제외됩니다.
-
----
-
-## 환경 변수
+<details>
+<summary>환경 변수</summary>
 
 | 변수 | 기본값 | 설명 |
 |---|---|---|
@@ -153,16 +144,7 @@ Include "~/.ssh/config.d/ezet"
 | `EZET_DRYRUN` | | `1` 이면 접속 대신 대상만 출력 |
 
 세션 조회·새로고침·이름변경은 SSH 마스터 연결을 재사용합니다(OpenSSH 6.7+ 자동, `et` 접속에는 영향 없음).
-
----
-
-## 개발
-
-```bash
-make test
-```
-
-`expect` 로 대화형 UI를 구동하고 `shellcheck` 로 정적 분석합니다. 테스트는 임시 `HOME` 을 사용합니다.
+</details>
 
 ---
 
