@@ -33,11 +33,18 @@ SSH · [Eternal Terminal](https://eternalterminal.dev/) · tmux 원격 세션을
 
 ## 설치
 
+**Homebrew** (macOS · Linux)
+
+```bash
+brew install zoo3323/tap/ezet
+```
+
+**설치 스크립트** — 내려받기·실행 권한·PATH 안내·의존성 점검까지 처리합니다.
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/zoo3323/ezet/main/install.sh | bash
 ```
 
-내려받기·실행 권한·PATH 안내·의존성 점검까지 처리합니다.
 `wget` 사용 시: `wget -qO- https://raw.githubusercontent.com/zoo3323/ezet/main/install.sh | bash`
 
 <details>
