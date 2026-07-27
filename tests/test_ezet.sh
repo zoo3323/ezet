@@ -448,4 +448,44 @@ send "q"
 expect eof
 EXPECT
 
+# --uninstall 은 ezet 이 넣은 Include 한 줄만 되돌리고, 사용자의 기존 설정과
+# 호스트 목록·백업은 절대 건드리지 않아야 한다.
+un_tmp=$(mktemp -d)
+mkdir -p "$un_tmp/.ssh/config.d"
+cat > "$un_tmp/.ssh/config" <<'UCFG'
+Host *
+    ServerAliveInterval 60
+
+Host work-vpn
+    HostName 10.1.2.3
+    User alice
+    ProxyJump bastion
+UCFG
+cp "$un_tmp/.ssh/config" "$un_tmp/original"
+printf 'Include %s/.ssh/config.d/other-tool\n' "$un_tmp" >> "$un_tmp/.ssh/config"
+cp "$un_tmp/.ssh/config" "$un_tmp/original"
+: > "$un_tmp/.ssh/config.d/other-tool"
+printf '\n' | HOME="$un_tmp" EZET_NO_MULTIPLEX=1 EZET_SSH_CONNECT_TIMEOUT=2 "$EZET_BIN" >/dev/null 2>&1 || true
+printf 'Host kept-host\n    HostName 192.0.2.77\n' >> "$un_tmp/.ssh/config.d/ezet"
+
+# 취소하면 아무것도 바뀌지 않아야 한다.
+cp "$un_tmp/.ssh/config" "$un_tmp/installed"
+printf 'n\n' | HOME="$un_tmp" "$EZET_BIN" --uninstall >/dev/null 2>&1 || true
+if ! cmp -s "$un_tmp/installed" "$un_tmp/.ssh/config"; then
+  printf 'uninstall must not change anything when declined\n' >&2; exit 100
+fi
+
+printf 'y\n' | HOME="$un_tmp" "$EZET_BIN" --uninstall >/dev/null 2>&1 || true
+if ! cmp -s "$un_tmp/original" "$un_tmp/.ssh/config"; then
+  printf 'uninstall must restore the original ssh config byte-for-byte\n' >&2
+  diff "$un_tmp/original" "$un_tmp/.ssh/config" >&2 || true
+  exit 101
+fi
+grep -q 'kept-host' "$un_tmp/.ssh/config.d/ezet" || { printf 'uninstall must keep the host list\n' >&2; exit 102; }
+[ -f "$un_tmp/.ssh/config.ezet-backup" ] || { printf 'uninstall must keep the backup\n' >&2; exit 103; }
+# 멱등: 두 번째 실행은 되돌릴 것이 없다고 알려야 한다.
+again=$(printf 'y\n' | HOME="$un_tmp" "$EZET_BIN" --uninstall 2>&1 || true)
+case "$again" in *"되돌릴 것이 없습니다"*) ;; *) printf 'uninstall must be idempotent\n' >&2; exit 104 ;; esac
+rm -rf "$un_tmp"
+
 printf 'ezet regression tests: PASS\n'

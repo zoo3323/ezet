@@ -99,6 +99,7 @@ ezet                 # 호스트 목록에서 선택
 ezet <host>          # 해당 호스트의 세션 목록
 ezet <host> <name>   # 세션에 바로 attach (없으면 생성)
 ezet --doctor        # 설정 점검
+ezet --uninstall     # 추가한 Include 한 줄만 제거
 ezet --version
 ezet --help
 ```
@@ -131,6 +132,8 @@ ezet --help
 ## SSH 설정
 
 ezet 이 추가하는 호스트는 `~/.ssh/config.d/ezet` 에만 저장되고, 기존 `~/.ssh/config` 에는 `Include` 한 줄만 덧붙습니다(수정 전 `~/.ssh/config.ezet-backup` 백업 생성). 직접 정의해 둔 Host 도 목록에 흐리게 표시되며 접속만 가능하고 건드리지 않습니다.
+
+되돌리려면 `ezet --uninstall` — 추가했던 `Include` 한 줄만 제거하고, 호스트 목록과 백업 파일은 그대로 둡니다.
 
 <details>
 <summary>환경 변수</summary>
