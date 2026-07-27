@@ -25,10 +25,6 @@ SSH · [Eternal Terminal](https://eternalterminal.dev/) · tmux 원격 세션을
 
 <img src="docs/img/sessions.svg" alt="세션 선택 화면" width="760">
 
-**검색** — `/` 입력
-
-<img src="docs/img/search.svg" alt="검색 화면" width="620">
-
 ---
 
 ## 설치
