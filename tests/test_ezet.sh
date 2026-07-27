@@ -217,6 +217,17 @@ case "${EZET_FAKE_SSH_MODE:-sessions}" in
       '__DT_NOW__=1700000000' \
       '__DT_SESSION__|work|1||1699999900|bash|/home/user'
     ;;
+  multi)
+    case "$*" in
+      *capture-pane*) printf 'PANE_OF_SECOND\n'; exit 0 ;;
+    esac
+    printf '%s\n' \
+      '__DT_CONNECTED__' \
+      '__DT_TMUX__=/usr/bin/tmux' \
+      '__DT_NOW__=1700000000' \
+      '__DT_SESSION__|alpha|1||1699999900|bash|/home/user' \
+      '__DT_SESSION__|bravo|1||1699999900|bash|/home/user'
+    ;;
   windows)
     printf '%s\n' "'printf' is not recognized as an internal or external command" >&2
     exit 127
@@ -251,6 +262,31 @@ expect {
 EXPECT
 
 awk -F '\t' '$1=="PLAIN" && $2=="host-b" && NF==2 {found=1} END {exit !found}' "$fake_ssh_log"
+
+# 미리보기(p) 후 목록으로 돌아와도 커서가 그대로여야 한다.
+# 커서가 첫 항목으로 튀면 이어지는 r/d 가 엉뚱한 세션에 적용된다(실서버에서 발생했던 버그).
+printf '' > "$fake_ssh_log"
+expect <<'EXPECT'
+set timeout 5
+spawn env HOME=$env(EZET_TEST_HOME) PATH=$env(EZET_FAKE_PATH) NO_COLOR=1 EZET_FAKE_SSH_MODE=multi EZET_FAKE_SSH_LOG=$env(EZET_FAKE_SSH_LOG) $env(EZET_TEST_BIN) host-b
+expect "tmux 세션 조회 완료*"
+expect -re {› alpha}
+send "\033\[B"
+expect -re {› bravo}
+send "p"
+expect {
+  "PANE_OF_SECOND" {}
+  timeout { exit 80 }
+}
+send " "
+expect {
+  -re {› bravo} {}
+  -re {› alpha} { exit 81 }
+  timeout { exit 82 }
+}
+send "q"
+expect eof
+EXPECT
 
 # Windows cmd 응답처럼 tmux 조회 자체가 실패해도 종료하지 않고 SSH SHELL을 선택할 수 있어야 한다.
 printf '' > "$fake_ssh_log"

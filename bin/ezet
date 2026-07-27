@@ -13,7 +13,7 @@
 # 환경변수 EZET_DRYRUN=1 이면 실제 접속 대신 대상만 출력(테스트용).
 set -euo pipefail
 
-EZET_VERSION="0.1.0"
+EZET_VERSION="0.1.1"
 
 # ── 전용 SSH config 모듈 ──────────────────────────────────────────
 # 공개 인터페이스: config_ensure, config_include_present
@@ -584,6 +584,9 @@ show_connect_status() {
 CUR=0; A_ACTION=""; A_IDX=0
 FILTER_ITEMS=(); FILTER_N=0; FILTER_SEARCHABLE=0
 FILTER_Q=""; FILTER_ON=0; VIS=(); DREW_LINES=0
+# 목록으로 되돌아올 때 유지할 커서 위치(원본 인덱스). 호출자가 지정하고 arrow_loop 이 소비한다.
+# 미리보기·이름변경·취소 후 커서가 첫 항목으로 튀어 엉뚱한 항목에 r/d 가 적용되는 것을 막는다.
+ARROW_START=0
 
 # 대소문자 무시 부분순서(subsequence) 매칭. 빈 쿼리는 항상 매칭.
 fuzzy_match() {
@@ -621,6 +624,13 @@ arrow_loop() {
   FILTER_Q=""; FILTER_ON=0
   FILTER_N="$item_count"
   build_vis
+  # 호출자가 요청한 시작 위치를 반영하고 소비한다(필터가 비어 있어 VIS 위치 = 원본 인덱스).
+  if [ "$ARROW_START" -gt 0 ] 2>/dev/null; then
+    if [ "$ARROW_START" -lt "${#VIS[@]}" ]; then CUR="$ARROW_START"
+    elif [ "${#VIS[@]}" -gt 0 ]; then CUR=$(( ${#VIS[@]} - 1 ))
+    fi
+  fi
+  ARROW_START=0
   hide_cursor
   while true; do
     vis_n=${#VIS[@]}
@@ -1161,14 +1171,16 @@ pick_host() {
     case "$A_ACTION" in
       cancel) return 1 ;;
       item)   printf '%s\n' "${hosts[$A_IDX]}"; return 0 ;;
-      new)    add_host || true; clear_screen; continue ;;
+      new)    ARROW_START=$A_IDX; add_host || true; clear_screen; continue ;;
       edit)
+        ARROW_START=$A_IDX
         old="${hosts[$A_IDX]}"
         if host_in_file "$old" "$EZET_HOSTS_FILE"; then edit_host "$old" || true
         else echo "  메인 SSH config의 호스트는 ezet에서 수정할 수 없습니다: $old" >&2; fi
         clear_screen
         continue ;;
       delete)
+        ARROW_START=$A_IDX
         old="${hosts[$A_IDX]}"
         if host_in_file "$old" "$EZET_HOSTS_FILE"; then
           if delete_host "$old" && [ "$n" -eq 1 ]; then return 1; fi
@@ -1507,6 +1519,7 @@ if is_tty; then
       back)   clear_screen; exec "$0" ;;
       ssh)    action=ssh ;;
       preview)
+        ARROW_START=$A_IDX
         if [ "$A_IDX" -lt "$count" ]; then preview_session "${names[$A_IDX]}"
         else clear_screen; fi
         continue ;;
@@ -1522,8 +1535,9 @@ if is_tty; then
           if valid_name "$target"; then break; fi
           echo "  잘못된 이름(영문/숫자/._- 만)." >&2
         done
-        if [ -z "$target" ]; then clear_screen; continue; fi ;;
+        if [ -z "$target" ]; then ARROW_START=$A_IDX; clear_screen; continue; fi ;;
       rename)
+        ARROW_START=$A_IDX
         if [ "$A_IDX" -ge "$count" ]; then
           echo "  SSH SHELL 항목은 이름을 변경할 수 없습니다." >&2
           clear_screen
@@ -1560,10 +1574,12 @@ if is_tty; then
     # tmux attach/detach 종료는 기존처럼 세션 선택 화면을 새로고침한다.
     clear_screen
     connect_status=0
+    keep_idx=$A_IDX
     if [ "$action" = ssh ]; then
       connect_plain_ssh || connect_status=$?
       if [ "$connect_status" -eq 255 ]; then
         clear_screen
+        ARROW_START=$keep_idx
         echo "[$host] 연결 실패 (status 255). 다시 시도하려면 Enter 또는 s를 누르세요." >&2
         continue
       fi
@@ -1572,6 +1588,7 @@ if is_tty; then
 
     connect_session "$target" || connect_status=$?
     clear_screen
+    ARROW_START=$keep_idx
     if [ "$connect_status" -ne 0 ]; then
       echo "[$host] 연결 실패 (status $connect_status). 다시 시도하려면 Enter 또는 s를 누르세요." >&2
       continue
