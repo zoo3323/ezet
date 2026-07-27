@@ -13,7 +13,7 @@
 # 환경변수 EZET_DRYRUN=1 이면 실제 접속 대신 대상만 출력(테스트용).
 set -euo pipefail
 
-EZET_VERSION="0.1.3"
+EZET_VERSION="0.1.4"
 
 # ── 전용 SSH config 모듈 ──────────────────────────────────────────
 # 공개 인터페이스: config_ensure, config_include_present
@@ -1339,7 +1339,9 @@ fetch_sessions() {
         __DT_NOW__=*)
           now="${line#__DT_NOW__=}"
           # 원격 값은 산술식에 들어가므로 반드시 숫자만 허용한다(아래 세션 필드도 동일).
-          case "$now" in ''|*[!0-9]*) now=0 ;; esac ;;
+          # 자릿수까지 제한한다. 64비트를 넘는 값은 test/산술에서 오류를 뿜어 화면을 망친다.
+          case "$now" in ''|*[!0-9]*) now=0 ;; esac
+          [ "${#now}" -gt 12 ] && now=0 ;;
         "__DT_SESSION__|"*)
           payload="${line#__DT_SESSION__|}"
           # 세션명에는 '|' 가 들어갈 수 있어 앞에서부터 자르면 필드가 밀린다.
@@ -1356,6 +1358,8 @@ fetch_sessions() {
           # 숫자 필드 검증: 검증 없이 $(( )) 에 넣으면 원격이 로컬 명령을 실행할 수 있다.
           case "$windows"  in ''|*[!0-9]*) windows=0 ;; esac
           case "$activity" in ''|*[!0-9]*) activity=0 ;; esac
+          [ "${#windows}"  -gt 6  ] && windows=0
+          [ "${#activity}" -gt 12 ] && activity=0
           [ "$attached" = attached ] || attached=""
           # 표시용 문자열의 제어문자(ANSI 이스케이프 등)를 제거해 화면 조작을 막는다.
           name="${name//[[:cntrl:]]/}"; cmd="${cmd//[[:cntrl:]]/}"; path="${path//[[:cntrl:]]/}"
