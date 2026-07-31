@@ -1,25 +1,26 @@
 #!/usr/bin/env bash
 # ezet [서버명] [세션이름]   (SSH + Eternal Terminal + tmux)
-#   세션 화면에서 tmux 세션 또는 일반 SSH 원격 셸을 선택한다.
+#   세션 화면에서 원격 tmux 세션을 선택하고, tmux를 쓸 수 없으면 SSH 셸로 접속한다.
 #   et(Eternal Terminal)로 접속 → 색상 100% 보존 + 네트워크 바뀌어도 자동 재연결.
 #   et가 없으면 ssh로 폴백(이 경우 sleep/roaming 후 자동 재연결은 안 됨).
 #
 # 대화형(터미널) 목록 조작:
 #   ↑/↓ 이동, Enter 선택/접속, q 종료
-#   세션 목록:  n=새 세션, r=세션 이름변경, b/←=호스트 목록
-#   호스트 목록: n=호스트 추가, e=접속정보 수정, d=호스트 삭제
+#   세션 목록:  방향키로 세션/액션 선택, e=세션 수정, ←=호스트 목록
+#   호스트 목록: 방향키로 호스트/액션 선택, e=접속정보 수정, d=호스트 삭제, o=순서 편집
 #
 # 서버명은 ~/.ssh/config 의 Host 별칭이어야 함 (예: dev).
 # 환경변수 EZET_DRYRUN=1 이면 실제 접속 대신 대상만 출력(테스트용).
 set -euo pipefail
 
-EZET_VERSION="0.1.5"
+EZET_VERSION="0.1.18"
 
 # ── 전용 SSH config 모듈 ──────────────────────────────────────────
 # 공개 인터페이스: config_ensure, config_include_present
 # 실제 환경은 기본 경로를, 테스트는 환경변수로 임시 파일 어댑터를 사용한다.
 EZET_SSH_CONFIG_FILE="${EZET_SSH_CONFIG_FILE:-$HOME/.ssh/config}"
 EZET_HOSTS_FILE="${EZET_HOSTS_FILE:-$HOME/.ssh/config.d/ezet}"
+EZET_HOST_ORDER_FILE="${EZET_HOST_ORDER_FILE:-${EZET_HOSTS_FILE}.order}"
 EZET_SSH_CONNECT_TIMEOUT="${EZET_SSH_CONNECT_TIMEOUT:-5}"
 case "$EZET_SSH_CONNECT_TIMEOUT" in
   ''|*[!0-9]*) EZET_SSH_CONNECT_TIMEOUT=5 ;;
@@ -29,7 +30,7 @@ if [ "$EZET_SSH_CONNECT_TIMEOUT" -lt 1 ] || [ "$EZET_SSH_CONNECT_TIMEOUT" -gt 60
 fi
 SSH_CONNECT_OPTIONS=(-o "ConnectTimeout=$EZET_SSH_CONNECT_TIMEOUT" -o ConnectionAttempts=1)
 
-# SSH 연결 멀티플렉싱: 세션 조회·새로고침·rename·SSH 폴백이 하나의 마스터 연결을 재사용해
+# SSH 연결 멀티플렉싱: 세션 조회·새로고침·수정·SSH 전송이 하나의 마스터 연결을 재사용해
 # 반복 인증/핸드셰이크 지연을 줄인다. et 전송에는 영향 없음(et는 ssh 옵션을 쓰지 않는다).
 # 함수는 옵션 파싱 이후·접속 이전에 호출한다(--help/--doctor 에서는 부작용이 없도록).
 # OpenSSH 6.7 미만(%C 미지원)이거나 소켓 경로가 플랫폼 한계에 가까우면 자동으로 비활성화한다.
@@ -116,9 +117,9 @@ if [ -t 2 ] && [ -z "${NO_COLOR:-}" ]; then
   RESET=$'\e[0m'; B=$'\e[1m'; DIM=$'\e[2m'
   SEL=$'\e[48;5;237m'      # 선택 행 하이라이트: 검정에 가까운 어두운 회색 배경
   RCF=$'\e[39;22m'         # 소프트 리셋: 글자색·굵기만 되돌리고 배경은 유지
-  CY=$'\e[36m'; GR=$'\e[32m'; YE=$'\e[33m'; RED=$'\e[31m'; BD=$'\e[38;5;240m'
+  CY=$'\e[36m'; GR=$'\e[32m'; YE=$'\e[33m'; RED=$'\e[31m'; BD=$'\e[38;5;240m'; HINT=$'\e[38;5;245m'
 else
-  RESET='' B='' DIM='' SEL='' RCF='' CY='' GR='' YE='' RED='' BD=''
+  RESET='' B='' DIM='' SEL='' RCF='' CY='' GR='' YE='' RED='' BD='' HINT=''
 fi
 
 doctor_file_mode() {
@@ -171,6 +172,10 @@ run_doctor() {
   else
     doctor_fail "ezet 전용 config가 없음: $EZET_HOSTS_FILE"
   fi
+  if [ -f "$EZET_HOST_ORDER_FILE" ]; then
+    mode=$(doctor_file_mode "$EZET_HOST_ORDER_FILE")
+    if [ "$mode" = 600 ]; then doctor_ok "호스트 순서 파일 권한: 600"; else doctor_warn "호스트 순서 파일 권한 권장값은 600입니다 (현재: $mode)"; fi
+  fi
   if config_include_present; then doctor_ok "SSH Include 연결됨"
   else doctor_fail "SSH config에 ezet Include가 없습니다"
   fi
@@ -198,6 +203,7 @@ run_uninstall() {
   fi
   printf '  %s그대로 두는 것 (삭제하지 않음)%s\n' "$B" "$RESET"
   [ -f "$EZET_HOSTS_FILE" ] && printf '    호스트 목록   %s\n' "$EZET_HOSTS_FILE"
+  [ -f "$EZET_HOST_ORDER_FILE" ] && printf '    호스트 순서   %s\n' "$EZET_HOST_ORDER_FILE"
   [ -f "$cfg.ezet-backup" ] && printf '    설정 백업     %s\n' "$cfg.ezet-backup"
   printf '    그 밖의 SSH 설정은 전혀 수정하지 않습니다.\n'
   [ -d "$EZET_CONTROL_DIR" ] && printf '\n  정리할 임시 파일: %s (연결 재사용 소켓)\n' "$EZET_CONTROL_DIR"
@@ -282,12 +288,19 @@ fi
 # 세션에 접속(있으면 attach, 없으면 생성). et 우선, 없으면 ssh 폴백.
 # 접속 종료 후 호출자가 목록을 새로고침할 수 있도록 exec 하지 않는다.
 connect_session() {
-  local session="$1" tmux_bin tmux_command transport
+  local session="$1" tmux_bin tmux_command transport et_port=""
   valid_name "$host" || { echo "ezet: 잘못된 서버명(영문/숫자/._- 만): $host" >&2; exit 2; }
   valid_name "$session" || { echo "ezet: 잘못된 세션명(영문/숫자/._- 만): $session" >&2; exit 2; }
   transport=$(connection_transport "$host")
+  if [ "$transport" = et ] && load_host_et_port "$host"; then
+    et_port="$RESOLVED_ET_PORT"
+  fi
   if [ -n "${EZET_DRYRUN:-${DT_DRYRUN:-}}" ]; then
-    echo "[dryrun] connect $host ← session '$session' via $transport"
+    if [ -n "$et_port" ]; then
+      echo "[dryrun] connect $host ← session '$session' via et (port $et_port)"
+    else
+      echo "[dryrun] connect $host ← session '$session' via $transport"
+    fi
     exit 0
   fi
   tmux_bin="${REMOTE_TMUX:-tmux}"
@@ -295,10 +308,14 @@ connect_session() {
   tmux_command="'$tmux_bin' new-session -A -s '$session'"
   if [ "$transport" = et ]; then
     show_connect_status 'ET + TMUX' "$host ← $session" '자동 재연결 · Ctrl-C 취소'
-    et "$host" -c "$tmux_command"
+    if [ -n "$et_port" ]; then
+      et -p "$et_port" "$host" -c "$tmux_command"
+    else
+      et "$host" -c "$tmux_command"
+    fi
   else
     if command -v et >/dev/null 2>&1; then
-      echo "[ezet] 외부 SSH 포트 → ssh 사용 (etserver 포트는 필요 없음)" >&2
+      echo "[ezet] ET 외부 포트 미설정 → ssh 사용 (호스트 수정에서 설정 가능)" >&2
     else
       echo "[ezet] et 미설치 → ssh 폴백 (sleep/roaming 후 자동 재연결은 안 됨)" >&2
     fi
@@ -307,8 +324,8 @@ connect_session() {
   fi
 }
 
-# tmux 세션을 조회하지 않고 원격 기본 셸에 바로 접속한다.
-# 접속이 끝나면 세션 선택 화면으로 돌아올 수 있도록 exec 하지 않는다.
+# tmux를 사용할 수 없는 호스트의 기본 원격 셸에 접속한다.
+# tmux 세션 화면의 `s` 단축키로 노출하지 않고, 폴백 행을 Enter로 선택했을 때만 호출한다.
 connect_plain_ssh() {
   valid_name "$host" || { echo "ezet: 잘못된 서버명(영문/숫자/._- 만): $host" >&2; return 2; }
   if [ -n "${EZET_DRYRUN:-${DT_DRYRUN:-}}" ]; then
@@ -317,37 +334,6 @@ connect_plain_ssh() {
   fi
   show_connect_status 'SSH SHELL' "$host" "최대 ${EZET_SSH_CONNECT_TIMEOUT}초 · Ctrl-C 취소"
   ssh "${SSH_CONNECT_OPTIONS[@]}" -t "$host"
-}
-
-# 원격 tmux 세션의 현재 화면을 캡처해 미리보기로 보여준다(접속하지 않음).
-# 세션명은 원격 명령에 삽입되므로 valid_name 으로만 허용한다.
-preview_session() {
-  local session="$1" tmux_bin content
-  clear_screen
-  if ! valid_name "$session"; then
-    printf '\n  미리보기 불가: 안전하지 않은 세션명입니다: %s\n' "$session" >&2
-  elif [ -n "${EZET_DRYRUN:-${DT_DRYRUN:-}}" ]; then
-    printf '\n  [dryrun] preview %s ← %s\n' "$host" "$session" >&2
-  else
-    tmux_bin="${REMOTE_TMUX:-}"
-    if ! valid_remote_tmux_path "$tmux_bin"; then
-      printf '\n  미리보기 불가: 원격 tmux 경로를 확인할 수 없습니다.\n' >&2
-    else
-      activity_start '미리보기 조회 중' "$host ← $session"
-      content=$(ssh -n "${SSH_CONNECT_OPTIONS[@]}" "$host" \
-        "'$tmux_bin' capture-pane -ep -t '$session'" 2>/dev/null || true)
-      stop_activity_silent
-      printf '\n  %s미리보기%s  %s%s ← %s%s\n\n' "$B" "$RESET" "$CY" "$host" "$session" "$RESET" >&2
-      if [ -n "$content" ]; then
-        printf '%s\n' "$content" >&2
-      else
-        printf '  (빈 화면이거나 캡처할 수 없습니다)\n' >&2
-      fi
-    fi
-  fi
-  printf '\n  %s아무 키나 누르면 목록으로 돌아갑니다%s' "$DIM" "$RESET" >&2
-  IFS= read -rsn1 _dummy_key || true
-  clear_screen
 }
 
 # 서버의 실제 접속 정보를 SSH config에서 해석.
@@ -396,7 +382,7 @@ host_has_explicit_port() {
       if (tolower($1)=="host") {
         for (i=2; i<=NF; i++) {
           if (substr($i,1,1)=="#") break
-          if ($i==target) active=1
+          if (tolower($i)==tolower(target)) active=1
         }
       }
       next
@@ -406,10 +392,42 @@ host_has_explicit_port() {
   ' "$cfg"
 }
 
-# 결과: et 또는 ssh. 외부 SSH 포트가 명시된 Host는 etserver 포트를 요구하지 않도록 SSH를 쓴다.
+# ezet 전용 Host 블록의 ET 포트 메타데이터를 읽는다.
+# SSH가 안전하게 무시하도록 `# ezet: et-port PORT` 주석으로 저장한다.
+# 성공 시 결과 전역: RESOLVED_ET_PORT
+load_host_et_port() {
+  local target="$1" cfg="$EZET_HOSTS_FILE" value
+  RESOLVED_ET_PORT=""
+  [ -f "$cfg" ] || return 1
+  value=$(awk -v target="$target" '
+    tolower($1)=="host" || tolower($1)=="match" {
+      if (active) exit
+      active=0
+      if (tolower($1)=="host") {
+        for (i=2; i<=NF; i++) {
+          if (substr($i,1,1)=="#") break
+          if (tolower($i)==tolower(target)) active=1
+        }
+      }
+      next
+    }
+    active && $1=="#" && tolower($2)=="ezet:" && tolower($3)=="et-port" {
+      print $4
+      found=1
+      exit
+    }
+    END { exit(found ? 0 : 1) }
+  ' "$cfg") || return 1
+  valid_port "$value" || return 1
+  RESOLVED_ET_PORT="$value"
+  return 0
+}
+
+# 결과: et 또는 ssh. 외부 SSH 포트 Host도 ET 포트가 따로 설정돼 있으면 ET를 쓴다.
 connection_transport() {
   local target="${1:-$host}"
   if ! command -v et >/dev/null 2>&1; then printf 'ssh\n'; return; fi
+  if load_host_et_port "$target"; then printf 'et\n'; return; fi
   if host_has_explicit_port "$target"; then printf 'ssh\n'; return; fi
   if resolve_host_fields "$target" && [ -n "$RESOLVED_PORT" ] && [ "$RESOLVED_PORT" != 22 ]; then
     printf 'ssh\n'; return
@@ -421,6 +439,14 @@ connection_transport() {
 INNER_W=46
 RULE=""
 set_box_width() { INNER_W="$1"; RULE=$(printf '─%.0s' $(seq 1 $((INNER_W + 2)))); }
+
+# 모든 화면의 첫 줄에 앱 이름과 현재 화면을 표시해, 단순한 명령 출력보다
+# 하나의 작은 터미널 앱처럼 보이게 한다.
+app_header() {
+  local section="$1"
+  printf '  %s●%s  %sezet%s  %s·  %s%s%s\n' \
+    "$CY" "$RESET" "$B" "$RESET" "$DIM" "$CY" "$section" "$RESET"
+}
 
 box_top() { printf '%s╭%s╮%s\n' "$BD" "$RULE" "$RESET"; }
 box_mid() { printf '%s├%s┤%s\n' "$BD" "$RULE" "$RESET"; }
@@ -450,6 +476,13 @@ disp_width() {
   local wide=$(( (bytes - chars - mid) / 2 ))
   [ "$wide" -lt 0 ] && wide=0
   printf '%s' $(( chars + wide ))
+}
+# 터미널은 글자 크기를 줄일 수 없으므로, 짧고 밝은 회색 텍스트를 표 우측 위에 붙인다.
+# `← 뒤로`의 실제 표시 폭은 6칸(화살표 1 + 공백 1 + 한글 4)이다.
+box_corner_hint() {
+  local text="$1" pad
+  pad=$(( INNER_W + 4 - 6 )); [ "$pad" -lt 0 ] && pad=0
+  printf '%*s%s%s%s\n' "$pad" "" "$HINT" "$text" "$RESET"
 }
 box_line_wide() {                 # 한글 포함 줄용: 표시 폭 기준으로 패딩
   local plain="$1" rendered="$2" pad
@@ -585,8 +618,77 @@ parse_connection_input() {
   parse_target "$target"
 }
 
+# 외부 SSH 호스트에 별도로 포워딩한 etserver 포트를 받는다.
+# current가 있으면 Enter로 유지하고, `-`로 ET를 끈다. 성공 시 결과 전역: TARGET_ET_PORT
+prompt_et_port() {
+  local current="${1:-}" input
+  TARGET_ET_PORT=""
+  while true; do
+    if [ -n "$current" ]; then
+      printf '   ET 외부 포트 (Enter=%s 유지, -=SSH만, q=취소): ' "$current" >&2
+    else
+      printf '   ET 외부 포트 (원격 2022 포워딩, Enter=SSH만, q=취소): ' >&2
+    fi
+    read -r input || return 1
+    case "$input" in
+      q|Q) echo "  취소됨." >&2; return 1 ;;
+      -) TARGET_ET_PORT=""; return 0 ;;
+      '') TARGET_ET_PORT="$current"; return 0 ;;
+    esac
+    if valid_port "$input"; then
+      TARGET_ET_PORT="$input"
+      return 0
+    fi
+    echo "   ✗ ET 외부 포트는 1~65535 사이의 숫자여야 합니다." >&2
+  done
+}
+
 is_tty() { [ -t 0 ]; }
 clear_screen() { printf '\e[2J\e[H' >&2; }   # 현재 화면만 지우고 스크롤백은 보존
+
+# 대화형 실행은 vim/lazygit 같은 터미널 대체 화면을 사용한다. 실행 중 출력이 셸
+# 스크롤백에 쌓이지 않고, 종료하면 ezet 실행 전 화면으로 정확히 돌아간다.
+# 원격 SSH/tmux가 터미널을 직접 쓸 때는 잠시 원래 화면으로 나갔다가 복귀한다.
+DASHBOARD_MODE=0
+DASHBOARD_ALT_ACTIVE=0
+dashboard_supported() {
+  is_tty && [ -t 2 ] && [ "${TERM:-}" != dumb ]
+}
+dashboard_start() {
+  dashboard_supported || return 0
+  DASHBOARD_MODE=1
+  if [ -n "${EZET_NO_ALT_SCREEN:-}" ]; then
+    clear_screen
+    return 0
+  fi
+  printf '\e[?1049h\e[2J\e[H' >&2
+  DASHBOARD_ALT_ACTIVE=1
+}
+dashboard_suspend() {
+  [ "$DASHBOARD_ALT_ACTIVE" -eq 1 ] || return 0
+  show_cursor
+  printf '\e[?1049l' >&2
+  DASHBOARD_ALT_ACTIVE=0
+}
+dashboard_resume() {
+  [ "$DASHBOARD_MODE" -eq 1 ] || return 0
+  if [ -n "${EZET_NO_ALT_SCREEN:-}" ]; then
+    clear_screen
+    return 0
+  fi
+  [ "$DASHBOARD_ALT_ACTIVE" -eq 0 ] || return 0
+  printf '\e[?1049h\e[2J\e[H' >&2
+  DASHBOARD_ALT_ACTIVE=1
+}
+dashboard_stop() {
+  if [ "$DASHBOARD_ALT_ACTIVE" -eq 1 ]; then
+    show_cursor
+    printf '\e[?1049l' >&2
+    DASHBOARD_ALT_ACTIVE=0
+  fi
+  DASHBOARD_MODE=0
+}
+
 CURSOR_HIDDEN=0
 hide_cursor() {
   if [ -t 2 ] && [ "$CURSOR_HIDDEN" -eq 0 ]; then
@@ -658,6 +760,19 @@ activity_stop() {
     "$color" "$icon" "$RESET" "$B" "$label" "$RESET" "$DIM" "$suffix" "$RESET" >&2
 }
 
+# SSH가 직접 /dev/tty에서 비밀번호를 읽을 수 있는 동안에는 스피너를 돌리지 않는다.
+# 백그라운드 재그리기가 OpenSSH 프롬프트를 덮지 않도록 입력 단계와 대기 상태를 고정 표시한다.
+show_ssh_auth_wait() {
+  local target="$1"
+  stop_activity_silent
+  show_cursor
+  printf '  %s◉%s  %sSSH 인증 확인%s  %s%s%s\n' \
+    "$YE" "$RESET" "$B" "$RESET" "$CY" "$target" "$RESET" >&2
+  printf '     %s비밀번호 요청 시 입력하세요 · 입력 문자는 표시되지 않습니다%s\n' \
+    "$B" "$RESET" >&2
+  printf '     %s요청이 없으면 연결 중이므로 잠시 기다리세요%s\n' "$DIM" "$RESET" >&2
+}
+
 show_connect_status() {
   local kind="$1" target="$2" detail="$3"
   show_cursor
@@ -665,18 +780,19 @@ show_connect_status() {
     "$YE" "$RESET" "$B" "$kind" "$RESET" "$CY" "$target" "$RESET" "$DIM" "$detail" "$RESET" >&2
 }
 
-# ── 화살표 선택 루프 + 타입-투-서치 ───────────────────────────────
-# 인자: $1=그리기함수 $2=항목수 $3=allow_new(n키) $4=secondary(edit|rename|none)
-# 결과 전역: A_ACTION=item|new|edit|delete|rename|preview|ssh|back|cancel, A_IDX(원본 항목 인덱스)
+# ── 화살표 선택 루프 + 검색 행 ───────────────────────────────────
+# 인자: $1=그리기함수 $2=항목수 $3=allow_new(n키) $4=secondary(edit|order|session|fallback|none)
+# 결과 전역: A_ACTION=item|new|edit|order|order_done|move_up|move_down|back|cancel,
+#             A_IDX(원본 항목 인덱스)
 #
 # 호출 전 전역을 채운다: FILTER_ITEMS(항목별 검색용 평문), FILTER_N(=항목수),
-#   FILTER_SEARCHABLE(1이면 '/' 로 검색 활성). 내부에서 VIS(보이는 원본 인덱스 목록),
-#   CUR(VIS 내 위치), DREW_LINES(직전에 그린 줄 수)를 관리한다.
+#   FILTER_SEARCHABLE(1이면 목록 위에 검색 행 표시). 내부에서 VIS(보이는 원본 인덱스 목록),
+#   CUR(VIS 내 위치), FILTER_ON(검색 행 선택 여부), DREW_LINES를 관리한다.
 CUR=0; A_ACTION=""; A_IDX=0
 FILTER_ITEMS=(); FILTER_N=0; FILTER_SEARCHABLE=0
 FILTER_Q=""; FILTER_ON=0; VIS=(); DREW_LINES=0
 # 목록으로 되돌아올 때 유지할 커서 위치(원본 인덱스). 호출자가 지정하고 arrow_loop 이 소비한다.
-# 미리보기·이름변경·취소 후 커서가 첫 항목으로 튀어 엉뚱한 항목에 r/d 가 적용되는 것을 막는다.
+# 수정·취소 후 커서가 첫 항목으로 튀어 엉뚱한 항목에 e/d 가 적용되는 것을 막는다.
 ARROW_START=0
 
 # 대소문자 무시 부분순서(subsequence) 매칭. 빈 쿼리는 항상 매칭.
@@ -708,6 +824,27 @@ build_vis() {
   done
 }
 
+# 목록 제목 바로 아래의 고정 검색 행. 선택되면 입력 커서를, 선택되지 않았을 때는
+# 검색 대상 힌트를 보여준다. 출력 뒤 구분선을 함께 그려 결과 목록과 분리한다.
+draw_search_row() {
+  local placeholder="$1" plain rendered
+  [ "$FILTER_SEARCHABLE" -eq 1 ] || return 0
+  if [ "$FILTER_ON" -eq 1 ]; then
+    plain="검색  $FILTER_Q "
+    rendered="${B}검색${RCF}  ${CY}${FILTER_Q}${RCF}${DIM}▌${RCF}"
+    box_line_wide_sel "$plain" "$rendered"
+  elif [ -n "$FILTER_Q" ]; then
+    plain="검색  $FILTER_Q"
+    rendered="${DIM}검색${RESET}  ${CY}${FILTER_Q}${RESET}"
+    box_line_wide "$plain" "$rendered"
+  else
+    plain="검색  $placeholder"
+    rendered="${DIM}${plain}${RESET}"
+    box_line_wide "$plain" "$rendered"
+  fi
+  box_mid
+}
+
 arrow_loop() {
   local draw="$1" item_count="$2" allow_new="$3" secondary="$4"
   local first=1 key k2 vis_n ascii_code
@@ -725,8 +862,11 @@ arrow_loop() {
   hide_cursor
   while true; do
     vis_n=${#VIS[@]}
-    if [ "$vis_n" -gt 0 ] && [ "$CUR" -ge "$vis_n" ]; then CUR=$((vis_n - 1)); fi
-    [ "$vis_n" -eq 0 ] && CUR=0
+    if [ "$vis_n" -eq 0 ] && [ "$FILTER_SEARCHABLE" -eq 1 ] && [ -n "$FILTER_Q" ]; then FILTER_ON=1; fi
+    if [ "$FILTER_ON" -eq 0 ]; then
+      if [ "$vis_n" -gt 0 ] && [ "$CUR" -ge "$vis_n" ]; then CUR=$((vis_n - 1)); fi
+      [ "$vis_n" -eq 0 ] && CUR=0
+    fi
     # 좁은 터미널에서는 도움말 줄이 래핑돼 커서-업 재그리기가 밀리므로 전체 지움을 쓴다.
     # 도움말 줄이 최대 ~75칸이라 80칸 미만에서는 안전하게 전체 지움으로 전환한다.
     if [ "$first" -eq 1 ]; then first=0
@@ -736,22 +876,34 @@ arrow_loop() {
     "$draw"
     IFS= read -rsn1 key || { A_ACTION=cancel; break; }
 
-    # 검색 모드: 입력한 글자로 실시간 필터. 명령키(n/e/d/…)는 검색어로 취급한다.
+    # 검색 행이 선택된 동안에는 모든 인쇄 가능 문자를 검색어로 받아 즉시 필터링한다.
+    # ↓/Enter는 첫 결과로, ↑는 마지막 결과로 이동한다.
     if [ "$FILTER_ON" -eq 1 ]; then
       case "$key" in
         $'\e')
           # k2 를 먼저 비운다: read 가 타임아웃(맨 Esc)이면 값을 안 바꿔 직전 시퀀스가 남기 때문.
           k2=""; IFS= read -rsn2 -t1 k2 || true
           case "$k2" in
-            '[A'|'OA') [ "$vis_n" -gt 0 ] && CUR=$(( (CUR - 1 + vis_n) % vis_n )) ;;
-            '[B'|'OB') [ "$vis_n" -gt 0 ] && CUR=$(( (CUR + 1) % vis_n )) ;;
-            '') FILTER_ON=0; FILTER_Q=""; build_vis; CUR=0 ;;
+            '[D'|'OD')
+              { [ "$secondary" = session ] || [ "$secondary" = fallback ]; } &&
+                { A_ACTION=back; A_IDX="${VIS[$CUR]:-0}"; break; } ;;
+            '[A'|'OA')
+              if [ "$vis_n" -gt 0 ]; then FILTER_ON=0; CUR=$((vis_n - 1))
+              else FILTER_Q=""; build_vis; FILTER_ON=0; CUR=0
+              fi ;;
+            '[B'|'OB')
+              if [ "$vis_n" -gt 0 ]; then FILTER_ON=0; CUR=0
+              else FILTER_Q=""; build_vis; FILTER_ON=0; CUR=0
+              fi ;;
+            '')
+              if [ -n "$FILTER_Q" ]; then FILTER_Q=""; build_vis; CUR=0
+              else FILTER_ON=0; CUR=0
+              fi ;;
           esac ;;
         ''|$'\n'|$'\r')
-          [ "$vis_n" -gt 0 ] && { A_ACTION=item; A_IDX="${VIS[$CUR]}"; break; } ;;
+          [ "$vis_n" -gt 0 ] && { FILTER_ON=0; CUR=0; } ;;
         $'\x7f'|$'\b')
-          if [ -n "$FILTER_Q" ]; then FILTER_Q="${FILTER_Q%?}"; build_vis; CUR=0
-          else FILTER_ON=0; build_vis; CUR=0; fi ;;
+          if [ -n "$FILTER_Q" ]; then FILTER_Q="${FILTER_Q%?}"; build_vis; CUR=0; fi ;;
         *)
           # ASCII 인쇄 가능 바이트만 검색어로 받는다(멀티바이트/제어문자 무시). 길이도 제한.
           ascii_code=$(LC_ALL=C printf '%d' "'$key" 2>/dev/null || echo 0)
@@ -763,39 +915,67 @@ arrow_loop() {
     fi
 
     case "$key" in
-      /) [ "$FILTER_SEARCHABLE" -eq 1 ] && { FILTER_ON=1; FILTER_Q=""; build_vis; CUR=0; } ;;
       $'\e')
         k2=""; IFS= read -rsn2 -t1 k2 || true
+        if { [ "$secondary" = session ] || [ "$secondary" = fallback ]; } &&
+          { [ "$k2" = '[D' ] || [ "$k2" = 'OD' ]; }; then
+          A_ACTION=back
+          A_IDX="${VIS[$CUR]:-0}"
+          break
+        fi
         if [ "$vis_n" -gt 0 ]; then
           case "$k2" in
-            '[A'|'OA') CUR=$(( (CUR - 1 + vis_n) % vis_n )) ;;
-            '[B'|'OB') CUR=$(( (CUR + 1) % vis_n )) ;;
-            '[D'|'OD') [ "$secondary" = rename ] && { A_ACTION=back; A_IDX="${VIS[$CUR]:-0}"; break; } ;;
+            '[A'|'OA')
+              if [ "$secondary" = order ]; then
+                A_ACTION=move_up; A_IDX="${VIS[$CUR]:-0}"; break
+              elif [ "$CUR" -eq 0 ] && [ "$FILTER_SEARCHABLE" -eq 1 ]; then
+                FILTER_ON=1
+              else
+                CUR=$(( (CUR - 1 + vis_n) % vis_n ))
+              fi ;;
+            '[B'|'OB')
+              if [ "$secondary" = order ]; then
+                A_ACTION=move_down; A_IDX="${VIS[$CUR]:-0}"; break
+              elif [ "$CUR" -eq $((vis_n - 1)) ] && [ "$FILTER_SEARCHABLE" -eq 1 ]; then
+                FILTER_ON=1
+              else
+                CUR=$(( (CUR + 1) % vis_n ))
+              fi ;;
+            '') [ "$secondary" = order ] && { A_ACTION=order_done; A_IDX="${VIS[$CUR]:-0}"; break; } ;;
+          esac
+        elif [ "$FILTER_SEARCHABLE" -eq 1 ]; then
+          case "$k2" in
+            '[A'|'OA'|'[B'|'OB') FILTER_ON=1 ;;
           esac
         fi ;;
       ''|$'\n'|$'\r')
-        if [ "$vis_n" -gt 0 ]; then A_ACTION=item; A_IDX="${VIS[$CUR]}"; break
+        if [ "$vis_n" -gt 0 ] && [ "$secondary" = order ]; then
+          A_ACTION=order_done; A_IDX="${VIS[$CUR]}"; break
+        elif [ "$vis_n" -gt 0 ]; then A_ACTION=item; A_IDX="${VIS[$CUR]}"; break
         elif [ "$allow_new" -eq 1 ]; then A_ACTION=new; A_IDX=0; break
         fi ;;
-      q|Q) A_ACTION=cancel; break ;;
-      n|N) [ "$allow_new" -eq 1 ] && { A_ACTION=new; A_IDX="${VIS[$CUR]:-0}"; break; } ;;
-      e|E) [ "$vis_n" -gt 0 ] && [ "$secondary" = edit ] && { A_ACTION=edit; A_IDX="${VIS[$CUR]}"; break; } ;;
+      q|Q)
+        if [ "$secondary" = order ]; then A_ACTION=order_done
+        else A_ACTION=cancel
+        fi
+        A_IDX="${VIS[$CUR]:-0}"
+        break ;;
+      e|E)
+        [ "$vis_n" -gt 0 ] && { [ "$secondary" = edit ] || [ "$secondary" = session ]; } &&
+          { A_ACTION=edit; A_IDX="${VIS[$CUR]}"; break; } ;;
       d|D) [ "$vis_n" -gt 0 ] && [ "$secondary" = edit ] && { A_ACTION=delete; A_IDX="${VIS[$CUR]}"; break; } ;;
-      r|R) [ "$vis_n" -gt 0 ] && [ "$secondary" = rename ] && { A_ACTION=rename; A_IDX="${VIS[$CUR]}"; break; } ;;
-      p|P) [ "$vis_n" -gt 0 ] && [ "$secondary" = rename ] && { A_ACTION=preview; A_IDX="${VIS[$CUR]}"; break; } ;;
-      s|S) [ "$secondary" = rename ] && { A_ACTION=ssh; A_IDX="${VIS[$CUR]:-0}"; break; } ;;
-      b|B) [ "$secondary" = rename ] && { A_ACTION=back; A_IDX="${VIS[$CUR]:-0}"; break; } ;;
+      o|O) [ "$vis_n" -gt 0 ] && [ "$secondary" = edit ] && { A_ACTION=order; A_IDX="${VIS[$CUR]}"; break; } ;;
     esac
   done
   show_cursor
 }
 
 # ── 호스트(서버) 관리 ────────────────────────────────────────────
-# ezet 전용 config의 Host 별칭을 먼저, 그다음 메인 ~/.ssh/config 의 Host 별칭을 줄단위로 출력한다.
+# ezet 전용 config의 Host 별칭을 먼저, 그다음 메인 ~/.ssh/config 의 Host 별칭을 줄단위로 수집한다.
 # 한 Host 줄의 리터럴 별칭을 모두(예: `Host web db` → web, db) 내보내고, 매칭 패턴
 # (와일드카드 * ?, 부정 !, 대괄호 [ ])과 중복(대소문자 무시)은 제외한다.
 # ezet이 만들지 않은 호스트에도 접속할 수 있게 한다.
-list_host_aliases() {
+list_host_aliases_raw() {
   local cfg kw rest tok lc out=" "
   for cfg in "$EZET_HOSTS_FILE" "$EZET_SSH_CONFIG_FILE"; do
     [ -f "$cfg" ] || continue
@@ -816,6 +996,91 @@ list_host_aliases() {
       done
     done < "$cfg"
   done
+}
+
+# 저장된 사용자 순서를 먼저 적용하고, 새로 발견한 호스트는 기존 config 순서대로 뒤에 붙인다.
+# 순서 파일의 사라진 별칭과 중복 항목은 조용히 무시한다.
+list_host_aliases() {
+  if [ ! -s "$EZET_HOST_ORDER_FILE" ]; then
+    list_host_aliases_raw
+    return
+  fi
+  list_host_aliases_raw | awk -v order_file="$EZET_HOST_ORDER_FILE" '
+    BEGIN {
+      while ((getline line < order_file) > 0) {
+        sub(/\r$/, "", line)
+        if (line != "") order[++order_n]=tolower(line)
+      }
+      close(order_file)
+    }
+    {
+      raw[++raw_n]=$0
+      folded[raw_n]=tolower($0)
+    }
+    END {
+      for (i=1; i<=order_n; i++) {
+        for (j=1; j<=raw_n; j++) {
+          if (!used[j] && folded[j]==order[i]) {
+            print raw[j]
+            used[j]=1
+            break
+          }
+        }
+      }
+      for (j=1; j<=raw_n; j++) {
+        if (!used[j]) print raw[j]
+      }
+    }
+  '
+}
+
+# 현재 화면의 전체 호스트 순서를 별도 파일에 원자적으로 저장한다.
+# SSH config와 분리하므로 ezet이 관리하지 않는 Host도 안전하게 정렬할 수 있다.
+save_host_order() {
+  local dir tmp alias
+  dir="${EZET_HOST_ORDER_FILE%/*}"
+  case "$EZET_HOST_ORDER_FILE" in
+    *$'\n'*) echo "  순서 저장 실패: 지원하지 않는 파일 경로입니다." >&2; return 1 ;;
+  esac
+  mkdir -p "$dir" || return 1
+  chmod 700 "$dir" 2>/dev/null || true
+  tmp="$dir/.ezet-order.$$"
+  if ! {
+    for alias in "$@"; do
+      [ -z "$alias" ] || printf '%s\n' "$alias"
+    done
+  } > "$tmp"; then
+    rm -f "$tmp" 2>/dev/null || true
+    return 1
+  fi
+  chmod 600 "$tmp" 2>/dev/null || true
+  if ! mv "$tmp" "$EZET_HOST_ORDER_FILE"; then
+    rm -f "$tmp" 2>/dev/null || true
+    return 1
+  fi
+}
+
+# 호스트 이름 변경·삭제 후에도 저장된 위치를 유지하고 오래된 별칭을 남기지 않는다.
+update_host_order_alias() {
+  local old="$1" new="${2:-}" dir tmp
+  [ -f "$EZET_HOST_ORDER_FILE" ] || return 0
+  dir="${EZET_HOST_ORDER_FILE%/*}"
+  tmp="$dir/.ezet-order.$$"
+  if ! awk -v old="$old" -v new="$new" '
+    tolower($0)==tolower(old) {
+      if (new!="") print new
+      next
+    }
+    { print }
+  ' "$EZET_HOST_ORDER_FILE" > "$tmp"; then
+    rm -f "$tmp" 2>/dev/null || true
+    return 1
+  fi
+  chmod 600 "$tmp" 2>/dev/null || true
+  if ! mv "$tmp" "$EZET_HOST_ORDER_FILE"; then
+    rm -f "$tmp" 2>/dev/null || true
+    return 1
+  fi
 }
 
 # 별칭이 특정 config 파일에 리터럴 Host로 있는지 확인(대소문자 무시, host_alias_exists 와 동일 기준).
@@ -856,7 +1121,7 @@ host_alias_exists() {
 
 # 새 호스트를 ezet 전용 config에 추가. 성공 0 / 취소·실패 1. (프롬프트는 stderr)
 add_host() {
-  local cfg="$EZET_HOSTS_FILE" alias input addr user port external defaulted shown
+  local cfg="$EZET_HOSTS_FILE" alias input addr user port external et_port="" defaulted shown
   printf '\n  %s새 호스트 추가%s\n' "$B" "$RESET" >&2
   while true; do
     printf '   %s접속 주소%s\n' "$B" "$RESET" >&2
@@ -873,6 +1138,11 @@ add_host() {
     port="$TARGET_PORT"; external="$TARGET_EXTERNAL"
     break
   done
+
+  if [ "$external" -eq 1 ]; then
+    prompt_et_port "" || return 1
+    et_port="$TARGET_ET_PORT"
+  fi
 
   while true; do
     printf '   별칭(alias, Enter=%s): ' "$addr" >&2
@@ -901,25 +1171,31 @@ add_host() {
     printf '\nHost %s\n'      "$alias" &&
     printf '    HostName %s\n' "$addr" &&
     { [ -z "$user" ]      || printf '    User %s\n' "$user"; } &&
-    { [ "$external" -ne 1 ] || printf '    Port %s\n' "$port"; }
+    { [ "$external" -ne 1 ] || printf '    Port %s\n' "$port"; } &&
+    { [ -z "$et_port" ]     || printf '    # ezet: et-port %s\n' "$et_port"; }
   } >> "$cfg"; then
     echo "  추가 실패: config 파일에 쓸 수 없습니다: $cfg" >&2
     return 1
   fi
   chmod 600 "$cfg" 2>/dev/null || true
   shown="${user:+$user@}$addr"
-  [ "$external" -eq 1 ] && shown="$shown:$port (외부 SSH)"
+  if [ "$external" -eq 1 ]; then
+    shown="$shown:$port (외부 SSH"
+    if [ -n "$et_port" ]; then shown="$shown · ET $et_port"; else shown="$shown · SSH만"; fi
+    shown="$shown)"
+  fi
   echo "  추가됨: $alias → $shown" >&2
   return 0
 }
 
-# 선택한 Host 블록에 직접 쓰인 HostName/User를 읽는다.
-# 결과 전역: HOST_DETAIL_ADDR/HOST_DETAIL_USER/HOST_DETAIL_PORT/HOST_DETAIL_HAS_PORT/HOST_DETAIL_PATTERNS
+# 선택한 Host 블록에 직접 쓰인 HostName/User/Port와 ezet ET 포트를 읽는다.
+# 결과 전역: HOST_DETAIL_ADDR/HOST_DETAIL_USER/HOST_DETAIL_PORT/HOST_DETAIL_HAS_PORT/
+#             HOST_DETAIL_ET_PORT/HOST_DETAIL_PATTERNS
 load_host_details() {
   local alias="$1" cfg="$EZET_HOSTS_FILE" details rest
   [ -f "$cfg" ] || return 1
   details=$(awk -v alias="$alias" '
-    BEGIN { target=0; found=0; h=""; u=""; p=""; patterns=0 }
+    BEGIN { target=0; found=0; h=""; u=""; p=""; ep=""; patterns=0 }
     tolower($1)=="host" || tolower($1)=="match" {
       if (found) exit
       target=0
@@ -928,7 +1204,7 @@ load_host_details() {
         for (i=2; i<=NF; i++) {
           if (substr($i,1,1)=="#") break
           patterns++
-          if ($i==alias) { target=1; found=1 }
+          if (tolower($i)==tolower(alias)) { target=1; found=1 }
         }
       }
       next
@@ -936,14 +1212,21 @@ load_host_details() {
     target && tolower($1)=="hostname" && h=="" { h=$2; next }
     target && tolower($1)=="user" && u=="" { u=$2; next }
     target && tolower($1)=="port" && p=="" { p=$2; next }
-    END { if (found) print h "|" u "|" p "|" patterns; else exit 3 }
+    target && $1=="#" && tolower($2)=="ezet:" && tolower($3)=="et-port" && ep=="" {
+      ep=$4
+      next
+    }
+    END { if (found) print h "|" u "|" p "|" ep "|" patterns; else exit 3 }
   ' "$cfg") || return 1
   HOST_DETAIL_ADDR="${details%%|*}"
   rest="${details#*|}"
   HOST_DETAIL_USER="${rest%%|*}"
   rest="${rest#*|}"
   HOST_DETAIL_PORT="${rest%%|*}"
+  rest="${rest#*|}"
+  HOST_DETAIL_ET_PORT="${rest%%|*}"
   HOST_DETAIL_PATTERNS="${rest##*|}"
+  valid_port "$HOST_DETAIL_ET_PORT" || HOST_DETAIL_ET_PORT=""
   [ -z "$HOST_DETAIL_ADDR" ] && HOST_DETAIL_ADDR="$alias"
   if [ -n "$HOST_DETAIL_PORT" ]; then HOST_DETAIL_HAS_PORT=1
   else HOST_DETAIL_HAS_PORT=0; HOST_DETAIL_PORT=22
@@ -951,24 +1234,30 @@ load_host_details() {
   return 0
 }
 
-# Host 별칭/HostName/User를 원자적으로 갱신하고 나머지 옵션은 보존한다.
+# Host 별칭/HostName/User/Port/ET 포트를 원자적으로 갱신하고 나머지 옵션은 보존한다.
 # Host old sibling 처럼 공유된 블록은 old만 독립 블록으로 분리해 sibling에 영향을 주지 않는다.
 update_host() {
-  local old="$1" new="$2" addr="$3" user="$4" port="$5" write_port="$6"
+  local old="$1" new="$2" addr="$3" user="$4" port="$5" write_port="$6" et_port="$7"
   local cfg="$EZET_HOSTS_FILE" tmp="${EZET_HOSTS_FILE%/*}/.ezet.tmp.$$"
   [ -f "$cfg" ] || return 1
-  if awk -v old="$old" -v new="$new" -v addr="$addr" -v user="$user" -v port="$port" -v write_port="$write_port" '
+  if awk -v old="$old" -v new="$new" -v addr="$addr" -v user="$user" -v port="$port" \
+    -v write_port="$write_port" -v et_port="$et_port" '
+    function is_et_port_marker() {
+      return ($1=="#" && tolower($2)=="ezet:" && tolower($3)=="et-port")
+    }
     function finish_target() {
       if (!target) return
       if (!seen_hostname) print "    HostName " addr
       if (user!="" && !seen_user) print "    User " user
       if (write_port && !seen_port) print "    Port " port
+      if (et_port!="" && !seen_et_port) print "    # ezet: et-port " et_port
     }
     function finish_shared( i) {
       if (!shared) return
       if (!seen_hostname) print "    HostName " addr
       if (user!="" && !seen_user) print "    User " user
       if (write_port && !seen_port) print "    Port " port
+      if (et_port!="" && !seen_et_port) print "    # ezet: et-port " et_port
       print sibling_header
       for (i=1; i<=buffer_count; i++) {
         print original[i]
@@ -981,7 +1270,7 @@ update_host() {
       key=tolower($1)
       if (key=="host" || key=="match") {
         if (shared) finish_shared(); else finish_target()
-        target=0; seen_hostname=0; seen_user=0; seen_port=0
+        target=0; seen_hostname=0; seen_user=0; seen_port=0; seen_et_port=0
         matched=0; pattern_count=0
         if (key=="host" && !found) {
           for (i=2; i<=NF; i++) {
@@ -1017,6 +1306,11 @@ update_host() {
       }
       if (shared) {
         original[++buffer_count]=$0
+        if (is_et_port_marker()) {
+          if (et_port!="" && !seen_et_port) print "    # ezet: et-port " et_port
+          seen_et_port=1
+          next
+        }
         if (key=="hostname") {
           if (!seen_hostname) print "    HostName " addr
           seen_hostname=1
@@ -1050,6 +1344,11 @@ update_host() {
         seen_port=1
         next
       }
+      if (target && is_et_port_marker()) {
+        if (et_port!="" && !seen_et_port) print "    # ezet: et-port " et_port
+        seen_et_port=1
+        next
+      }
       print
     }
     END {
@@ -1067,16 +1366,17 @@ update_host() {
 
 # 호스트의 접속 주소·사용자·별칭을 수정한다.
 edit_host() {
-  local old="$1" input addr user port external alias current target shown
-  local original_addr original_user original_port original_external shared=0
+  local old="$1" input addr user port external et_port alias current target shown
+  local original_addr original_user original_port original_external original_et_port shared=0
   if ! load_host_details "$old"; then
     echo "  수정 실패: ezet 전용 config에서 '$old' 설정을 찾지 못했습니다." >&2
     return 1
   fi
   [ "$HOST_DETAIL_PATTERNS" -gt 1 ] && shared=1
   addr="$HOST_DETAIL_ADDR"; user="$HOST_DETAIL_USER"
-  port="$HOST_DETAIL_PORT"; external="$HOST_DETAIL_HAS_PORT"
-  original_addr="$addr"; original_user="$user"; original_port="$port"; original_external="$external"
+  port="$HOST_DETAIL_PORT"; external="$HOST_DETAIL_HAS_PORT"; et_port="$HOST_DETAIL_ET_PORT"
+  original_addr="$addr"; original_user="$user"; original_port="$port"
+  original_external="$external"; original_et_port="$et_port"
   target="${user:+$user@}$addr"
   if [ "$external" -eq 1 ]; then current="$port $target"; else current="$target"; fi
 
@@ -1099,6 +1399,13 @@ edit_host() {
     break
   done
 
+  if [ "$external" -eq 1 ]; then
+    prompt_et_port "$et_port" || return 1
+    et_port="$TARGET_ET_PORT"
+  else
+    et_port=""
+  fi
+
   while true; do
     printf '   별칭(alias, Enter=%s, q=취소): ' "$old" >&2
     read -r alias || return 1
@@ -1115,13 +1422,22 @@ edit_host() {
     break
   done
 
-  if [ "$alias" = "$old" ] && [ "$addr" = "$original_addr" ] && [ "$user" = "$original_user" ] && [ "$port" = "$original_port" ] && [ "$external" = "$original_external" ]; then
+  if [ "$alias" = "$old" ] && [ "$addr" = "$original_addr" ] && [ "$user" = "$original_user" ] \
+    && [ "$port" = "$original_port" ] && [ "$external" = "$original_external" ] \
+    && [ "$et_port" = "$original_et_port" ]; then
     echo "  변경 없음." >&2
     return 0
   fi
-  if update_host "$old" "$alias" "$addr" "$user" "$port" "$external"; then
+  if update_host "$old" "$alias" "$addr" "$user" "$port" "$external" "$et_port"; then
+    if [ "$alias" != "$old" ] && ! update_host_order_alias "$old" "$alias"; then
+      echo "  주의: 접속 정보는 변경됐지만 저장된 호스트 순서는 갱신하지 못했습니다." >&2
+    fi
     shown="${user:+$user@}$addr"
-    [ "$external" -eq 1 ] && shown="$shown:$port (외부 SSH)"
+    if [ "$external" -eq 1 ]; then
+      shown="$shown:$port (외부 SSH"
+      if [ -n "$et_port" ]; then shown="$shown · ET $et_port"; else shown="$shown · SSH만"; fi
+      shown="$shown)"
+    fi
     echo "  변경됨: $alias → $shown" >&2
     [ "$shared" -eq 1 ] && echo "  분리됨: 공유 Host 블록에서 '$alias' 설정만 독립시켰습니다." >&2
     return 0
@@ -1179,6 +1495,9 @@ delete_host() {
   ' "$cfg" > "$tmp"; then
     mv "$tmp" "$cfg" || { rm -f "$tmp" 2>/dev/null || true; echo "  삭제 실패: config 파일을 갱신하지 못했습니다." >&2; return 1; }
     chmod 600 "$cfg" 2>/dev/null || true
+    if ! update_host_order_alias "$alias" ""; then
+      echo "  주의: 호스트는 삭제됐지만 저장된 순서에서 제거하지 못했습니다." >&2
+    fi
     echo "  삭제됨: $alias" >&2
     return 0
   fi
@@ -1188,44 +1507,62 @@ delete_host() {
 }
 
 # 호스트 목록 그리기 (전역 HN/HROW_*/HREND/VIS/CUR/FILTER_* 사용, stderr 출력)
-HROW_PLAIN=(); HREND=(); HN=0
+HROW_PLAIN=(); HREND=(); HROW_ACTION=(); HN=0; HOST_ACTION_COUNT=0; HOST_ORDER_MODE=0
 draw_hosts() {
-  local pos orig rows=0 total hdr
+  local pos orig rows=0 search_rows=0 total hdr host_total=0 action_started=0 plain rendered
   total=${#VIS[@]}
+  for orig in "${VIS[@]}"; do [ "$orig" -lt "$HN" ] && host_total=$((host_total + 1)); done
   {
-    echo
+    app_header 'SSH HOSTS'
     box_top
-    if [ "$FILTER_ON" -eq 1 ]; then hdr="SSH HOSTS ($total/$HN)"; else hdr="SSH HOSTS ($HN)"; fi
+    if [ "$HOST_ORDER_MODE" -eq 1 ]; then
+      hdr="HOST ORDER ($HN)"
+    elif [ -n "$FILTER_Q" ]; then
+      hdr="SSH HOSTS ($host_total/$HN)"
+    else
+      hdr="SSH HOSTS ($HN)"
+    fi
     box_line_wide "$hdr" "${B}${hdr}${RESET}"
     box_mid
+    if [ "$FILTER_SEARCHABLE" -eq 1 ]; then
+      draw_search_row "호스트 이름 또는 주소"
+      search_rows=2
+    fi
     if [ "$total" -eq 0 ]; then
       box_line_wide "일치 항목 없음" "${DIM}일치 항목 없음${RESET}"
       rows=1
     else
       for pos in "${!VIS[@]}"; do
         orig="${VIS[$pos]}"
-        if [ "$pos" -eq "$CUR" ]; then box_line_wide_sel "${HROW_PLAIN[$orig]}" "${HREND[$orig]}"
-        else box_line_wide "${HROW_PLAIN[$orig]}" "${HREND[$orig]}"; fi
+        if [ "$orig" -ge "$HN" ]; then
+          if [ "$action_started" -eq 0 ]; then box_mid; rows=$((rows + 1)); action_started=1; fi
+          plain="${HROW_PLAIN[$orig]}"; rendered="${HREND[$orig]}"
+        else
+          plain="${HROW_PLAIN[$orig]}"; rendered="${HREND[$orig]}"
+        fi
+        if [ "$FILTER_ON" -eq 0 ] && [ "$pos" -eq "$CUR" ]; then box_line_wide_sel "$plain" "$rendered"
+        else box_line_wide "$plain" "$rendered"; fi
         rows=$((rows + 1))
       done
     fi
     box_bot
     echo
-    if [ "$FILTER_ON" -eq 1 ]; then
-      printf '  %s검색%s %s%s%s%s  ·  %sEnter%s 선택 · %sEsc%s 취소\n' \
-        "$B" "$RESET" "$CY" "$FILTER_Q" "$RESET" "${DIM}▌${RESET}" "$B" "$RESET" "$B" "$RESET"
+    if [ "$HOST_ORDER_MODE" -eq 1 ]; then
+      printf '  %s↑/↓%s 순서 변경 · %sEnter%s 완료 · %sEsc%s 취소\n' \
+        "$B" "$RESET" "$B" "$RESET" "$B" "$RESET"
     else
-      printf '  %s↑/↓%s 이동 · %sEnter%s 선택 · %s/%s 검색 · %sn%s 추가 · %se%s 수정 · %sd%s 삭제 · %sq%s 취소\n' \
-        "$B" "$RESET" "$B" "$RESET" "$B" "$RESET" "$B" "$RESET" "$B" "$RESET" "$B" "$RESET" "$B" "$RESET"
+      printf '  %se%s 수정 · %sd%s 삭제 · %so%s 순서 · %sq%s 종료\n' \
+        "$B" "$RESET" "$B" "$RESET" "$B" "$RESET" "$B" "$RESET"
     fi
   } >&2
-  DREW_LINES=$((7 + rows))
+  DREW_LINES=$((7 + rows + search_rows))
 }
 
 # 서버를 골라 그 이름을 stdout 으로 반환. 취소면 return 1.
 pick_host() {
   is_tty || { pick_host_text; return $?; }
-  local hosts h n a hn old cols width name_w addr_w
+  local hosts h n a hn old cols width name_w addr_w swap
+  HOST_ORDER_MODE=0
   while true; do
     hosts=()
     while IFS= read -r h; do [ -n "$h" ] && hosts+=("$h"); done < <(list_host_aliases)
@@ -1243,7 +1580,7 @@ pick_host() {
     name_w=12; [ "$width" -lt 34 ] && name_w=9
     addr_w=$((width - name_w - 3)); [ "$addr_w" -lt 8 ] && addr_w=8
     HN=$n
-    HROW_PLAIN=(); HREND=(); FILTER_ITEMS=()
+    HROW_PLAIN=(); HREND=(); HROW_ACTION=(); FILTER_ITEMS=(); HOST_ACTION_COUNT=0
     for h in "${hosts[@]}"; do
       a="$(resolve_address "$h" || true)"; [ -z "$a" ] && a="?"; a="$(trunc "$a" "$addr_w")"
       printf -v hn "%-${name_w}s" "$(trunc "$h" "$name_w")"
@@ -1256,13 +1593,58 @@ pick_host() {
       fi
       FILTER_ITEMS+=("$h $a")
     done
-    FILTER_SEARCHABLE=1
-
-    arrow_loop draw_hosts "$n" 1 edit
+    if [ "$HOST_ORDER_MODE" -eq 1 ]; then
+      FILTER_SEARCHABLE=0
+      arrow_loop draw_hosts "$n" 0 order
+    else
+      HROW_PLAIN+=('＋ 새 호스트')
+      HREND+=("${YE}${B}＋ 새 호스트${RCF}")
+      HROW_ACTION+=('new')
+      FILTER_ITEMS+=('new host add')
+      HOST_ACTION_COUNT=1
+      FILTER_SEARCHABLE=1
+      arrow_loop draw_hosts "$((n + HOST_ACTION_COUNT))" 1 edit
+    fi
     case "$A_ACTION" in
       cancel) return 1 ;;
-      item)   printf '%s\n' "${hosts[$A_IDX]}"; return 0 ;;
+      item)
+        if [ "$A_IDX" -ge "$n" ]; then
+          ARROW_START=0; add_host || true; clear_screen; continue
+        fi
+        printf '%s\n' "${hosts[$A_IDX]}"; return 0 ;;
       new)    ARROW_START=$A_IDX; add_host || true; clear_screen; continue ;;
+      order)
+        HOST_ORDER_MODE=1
+        ARROW_START=$A_IDX
+        clear_screen
+        continue ;;
+      order_done)
+        HOST_ORDER_MODE=0
+        ARROW_START=$A_IDX
+        clear_screen
+        continue ;;
+      move_up)
+        ARROW_START=$A_IDX
+        if [ "$A_IDX" -gt 0 ]; then
+          swap="${hosts[$((A_IDX - 1))]}"
+          hosts[A_IDX - 1]="${hosts[$A_IDX]}"
+          hosts[A_IDX]="$swap"
+          if save_host_order "${hosts[@]}"; then ARROW_START=$((A_IDX - 1))
+          else echo "  호스트 순서를 저장하지 못했습니다: $EZET_HOST_ORDER_FILE" >&2; fi
+        fi
+        clear_screen
+        continue ;;
+      move_down)
+        ARROW_START=$A_IDX
+        if [ "$A_IDX" -lt $((n - 1)) ]; then
+          swap="${hosts[$((A_IDX + 1))]}"
+          hosts[A_IDX + 1]="${hosts[$A_IDX]}"
+          hosts[A_IDX]="$swap"
+          if save_host_order "${hosts[@]}"; then ARROW_START=$((A_IDX + 1))
+          else echo "  호스트 순서를 저장하지 못했습니다: $EZET_HOST_ORDER_FILE" >&2; fi
+        fi
+        clear_screen
+        continue ;;
       edit)
         ARROW_START=$A_IDX
         old="${hosts[$A_IDX]}"
@@ -1448,12 +1830,12 @@ fetch_sessions() {
     # (Windows cmd 는 여러 줄 중 첫 줄만 실행하고, 오류 메시지는 OS 언어로 현지화되므로
     #  문자열 매칭 대신 이 동작 차이로 판별한다.)
     FETCH_ERROR="Windows 등 비POSIX 셸"
-    FETCH_HINT="원격 셸이 POSIX 스크립트를 실행하지 못했습니다. tmux 대신 SSH 셸로 접속하세요."
+    FETCH_HINT="tmux 세션은 사용할 수 없습니다. 아래 SSH 셸로 직접 접속할 수 있습니다."
     return 1
   fi
   if [ "$no_tmux" -eq 1 ]; then
     FETCH_ERROR="원격에 tmux 없음"
-    FETCH_HINT="원격에 tmux 가 설치돼 있지 않습니다. 설치하거나 SSH 셸로 접속하세요."
+    FETCH_HINT="원격에 tmux 를 설치한 뒤 다시 시도하거나 아래 SSH 셸로 직접 접속하세요."
     return 1
   fi
   if [ "$tmux_exec_failed" -eq 1 ]; then
@@ -1463,21 +1845,23 @@ fetch_sessions() {
   fi
   if [ "$bad_tmux_path" -eq 1 ] || [ -z "$REMOTE_TMUX" ]; then
     FETCH_ERROR="tmux 경로 확인 불가"
-    FETCH_HINT="원격 tmux 경로를 신뢰할 수 없어 사용하지 않습니다. SSH 셸로 접속하세요."
+    FETCH_HINT="원격 tmux 경로를 확인하거나 아래 SSH 셸로 직접 접속하세요."
     return 1
   fi
   return 0
 }
 
-# 전역: DIR_W TH_PLAIN ROW_PLAIN[] ROW_REND[] SSH_ROW_*  (+ set_box_width)
-SSH_ROW_PLAIN=""; SSH_ROW_REND=""
+# 전역: DIR_W TH_PLAIN ROW_PLAIN[] ROW_REND[] (+ set_box_width)
+SSH_FALLBACK_PLAIN="SSH 셸  tmux 없이 직접 연결"
+SSH_FALLBACK_REND="${YE}${B}SSH 셸${RCF}  ${DIM}tmux 없이 직접 연결${RESET}"
+ROW_ACTION=(); SESSION_ACTION_COUNT=0
 build_session_rows() {
   local PREFIX_W=59 dirmax=3 p b cols avail max_inner name_w
   local k st sc idle_s ic c_n c_w c_s c_e c_c c_d
   for p in "${paths[@]:-}"; do b="${p##*/}"; [ "${#b}" -gt "$dirmax" ] && dirmax=${#b}; done
   cols=$(term_cols)
   max_inner=$((cols - 4)); [ "$max_inner" -lt 20 ] && max_inner=20
-  ROW_PLAIN=(); ROW_REND=()
+  ROW_PLAIN=(); ROW_REND=(); ROW_ACTION=(); SESSION_ACTION_COUNT=0
 
   if [ "$cols" -ge 72 ]; then
     avail=$(( max_inner - PREFIX_W - 1 )); [ "$avail" -lt 8 ] && avail=8
@@ -1488,17 +1872,11 @@ build_session_rows() {
     set_box_width "$(( PREFIX_W + DIR_W + 1 ))"
     TH_PLAIN=$(printf "%-19s  %-4s  %-8s  %-6s  %-12s  %s" \
                "TMUX ($count)" 'WIN' 'STATUS' 'IDLE' 'CMD' 'DIR')
-    # 일반 SSH 셸은 tmux 세션이 아니므로 표 컬럼이 아니라 한 줄 라벨로, 구분선 아래에 둔다.
-    # 표 내용이 모두 ASCII 라 라벨도 ASCII 로 맞춘다(한글은 더블폭이라 유독 크게 보인다).
-    SSH_ROW_PLAIN="SSH shell (no tmux)"
-    SSH_ROW_REND="${YE}${B}SSH shell${RCF} ${DIM}(no tmux)${RESET}"
   else
     # 좁은 창에서는 핵심 정보만 남겨 가로 스크롤 없이 표시한다.
     set_box_width "$max_inner"
     name_w=$((max_inner - 14)); [ "$name_w" -lt 6 ] && name_w=6
     TH_PLAIN=$(printf "%-${name_w}s  %-3s  %-6s" "$(trunc "TMUX ($count)" "$name_w")" 'ST' 'IDLE')
-    SSH_ROW_PLAIN="SSH shell (no tmux)"
-    SSH_ROW_REND="${YE}${B}SSH shell${RCF} ${DIM}(no tmux)${RESET}"
   fi
 
   k=0
@@ -1530,29 +1908,47 @@ build_session_rows() {
     k=$((k + 1))
   done
 
-  # 검색용 평문(세션명+명령+경로), 마지막은 항상 SSH SHELL 행. arrow_loop 의 VIS 매핑에 쓴다.
+  # 검색용 평문(세션명+명령+경로). arrow_loop 의 VIS 매핑에 쓴다.
   FILTER_ITEMS=()
   k=0
   while [ "$k" -lt "$count" ]; do
     FILTER_ITEMS+=("${names[$k]} ${cmds[$k]:-} ${paths[$k]:-}")
     k=$((k + 1))
   done
-  FILTER_ITEMS+=("ssh shell remote")
-  FILTER_SEARCHABLE=1
+  if [ "$TMUX_AVAILABLE" -eq 0 ]; then
+    FILTER_ITEMS=("ssh shell remote")
+    FILTER_SEARCHABLE=0
+  else
+    ROW_PLAIN+=('＋ 새 세션')
+    ROW_REND+=("${YE}${B}＋ 새 세션${RCF}")
+    ROW_ACTION[count]='new'
+    FILTER_ITEMS+=('new session add')
+    ROW_PLAIN+=('SSH 셸  직접 연결')
+    ROW_REND+=("${CY}${B}SSH 셸${RCF}  ${DIM}직접 연결${RESET}")
+    ROW_ACTION[count + 1]='ssh'
+    FILTER_ITEMS+=('ssh shell direct')
+    SESSION_ACTION_COUNT=2
+    FILTER_SEARCHABLE=1
+  fi
 }
 
-# 세션 대시보드 그리기. tmux 상태와 무관하게 마지막 선택 항목은 항상 SSH SHELL이다.
+# 세션 대시보드 그리기.
 TMUX_AVAILABLE=0
 draw_sessions() {
-  local value_w=$((INNER_W - 6)) info pos orig rows=0 hint_rows=0
+  local value_w=$((INNER_W - 6)) info pos orig rows=0 hint_rows=0 search_rows=0 action_started=0
   [ "$value_w" -lt 8 ] && value_w=8
   {
-    echo
+    app_header 'TMUX SESSIONS'
+    box_corner_hint "← 뒤로"
     box_top
     row_kv 'HOST' "$(trunc "$host" "$value_w")" "${CY}${B}"
     row_kv 'ADDR' "$(trunc "$addr" "$value_w")" "$B"
     row_kv 'VIA'  "$(trunc "$via" "$value_w")" "$YE"
     box_mid
+    if [ "$FILTER_SEARCHABLE" -eq 1 ]; then
+      draw_search_row "세션 이름, 명령 또는 경로"
+      search_rows=2
+    fi
     box_line_wide "$TH_PLAIN" "${DIM}${TH_PLAIN}${RESET}"
     if [ "$count" -eq 0 ]; then
       if [ "$TMUX_AVAILABLE" -eq 1 ]; then
@@ -1565,24 +1961,24 @@ draw_sessions() {
         box_line_wide "$info" "${RED}${info}${RESET}"
       fi
       rows=$((rows + 1))
+      if [ "$TMUX_AVAILABLE" -eq 0 ]; then
+        box_mid
+        box_line_wide_sel "$SSH_FALLBACK_PLAIN" "$SSH_FALLBACK_REND"
+        rows=$((rows + 2))
+      fi
     fi
-    if [ "${#VIS[@]}" -eq 0 ]; then
+    if [ "$count" -gt 0 ] && [ "${#VIS[@]}" -eq 0 ]; then
       box_line_wide "일치 항목 없음" "${DIM}일치 항목 없음${RESET}"
       rows=$((rows + 1))
-    else
-      local sess_shown=0
+    fi
+    if [ "$TMUX_AVAILABLE" -eq 1 ]; then
       for pos in "${!VIS[@]}"; do
         orig="${VIS[$pos]}"
-        if [ "$orig" -ge "$count" ]; then
-          # tmux 세션과 시각적으로 분리한다: 위에 세션이 하나라도 있으면 구분선을 넣는다.
-          if [ "$sess_shown" -gt 0 ]; then box_mid; rows=$((rows + 1)); fi
-          if [ "$pos" -eq "$CUR" ]; then box_line_wide_sel "$SSH_ROW_PLAIN" "$SSH_ROW_REND"
-          else box_line_wide "$SSH_ROW_PLAIN" "$SSH_ROW_REND"; fi
-        else
-          if [ "$pos" -eq "$CUR" ]; then box_line_wide_sel "${ROW_PLAIN[$orig]}" "${ROW_REND[$orig]}"
-          else box_line_wide "${ROW_PLAIN[$orig]}" "${ROW_REND[$orig]}"; fi
-          sess_shown=$((sess_shown + 1))
+        if [ "$orig" -ge "$count" ] && [ "$action_started" -eq 0 ]; then
+          box_mid; rows=$((rows + 1)); action_started=1
         fi
+        if [ "$FILTER_ON" -eq 0 ] && [ "$pos" -eq "$CUR" ]; then box_line_wide_sel "${ROW_PLAIN[$orig]}" "${ROW_REND[$orig]}"
+        else box_line_wide "${ROW_PLAIN[$orig]}" "${ROW_REND[$orig]}"; fi
         rows=$((rows + 1))
       done
     fi
@@ -1593,41 +1989,44 @@ draw_sessions() {
       printf '  %s%s%s\n\n' "$DIM" "$FETCH_HINT" "$RESET"
       hint_rows=2
     fi
-    if [ "$FILTER_ON" -eq 1 ]; then
-      printf '  %s검색%s %s%s%s%s  ·  %sEnter%s 선택 · %sEsc%s 취소\n' \
-        "$B" "$RESET" "$CY" "$FILTER_Q" "$RESET" "${DIM}▌${RESET}" "$B" "$RESET" "$B" "$RESET"
-    elif [ "$TMUX_AVAILABLE" -eq 0 ]; then
-      printf '  %sEnter/s%s SSH 셸 · %s/%s 검색 · %sb/←%s 뒤로 · %sq%s 종료\n' \
-        "$B" "$RESET" "$B" "$RESET" "$B" "$RESET" "$B" "$RESET"
+    if [ "$TMUX_AVAILABLE" -eq 0 ]; then
+      printf '  %sq%s 종료\n' "$B" "$RESET"
     elif [ "$count" -eq 0 ]; then
-      printf '  %sEnter/s%s 일반 SSH · %sn%s 새 tmux 세션 · %s/%s 검색 · %sb/←%s 뒤로 · %sq%s 종료\n' \
-        "$B" "$RESET" "$B" "$RESET" "$B" "$RESET" "$B" "$RESET" "$B" "$RESET"
+      printf '  %sq%s 종료\n' "$B" "$RESET"
     else
-      printf '  %s↑/↓%s · %sEnter%s 선택 · %ss%s SSH · %sp%s 미리보기 · %sn%s 새 세션 · %sr%s 이름 · %s/%s 검색 · %sq%s 종료\n' \
-        "$B" "$RESET" "$B" "$RESET" "$B" "$RESET" "$B" "$RESET" "$B" "$RESET" "$B" "$RESET" "$B" "$RESET" "$B" "$RESET"
+      printf '  %se%s 수정 · %sq%s 종료\n' \
+        "$B" "$RESET" "$B" "$RESET"
     fi
   } >&2
-  DREW_LINES=$(( 7 + rows + 3 + hint_rows ))
+  DREW_LINES=$(( 8 + rows + 3 + hint_rows + search_rows ))
 }
 
 refresh_sessions() {
   local label="${1:-tmux 세션 조회}"
-  activity_start "$label 중" "$host · 최대 ${EZET_SSH_CONNECT_TIMEOUT}초"
+  # 대화형 화면에서는 이전 호스트/세션 목록 아래에 상태와 새 표를 이어 붙이지 않는다.
+  # 조회 중 화면과 완성된 대시보드가 각각 같은 터미널 화면을 교체해 사용한다.
+  if is_tty; then clear_screen; fi
+  if is_tty; then
+    show_ssh_auth_wait "$host"
+  else
+    activity_start "$label 중" "$host · 최대 ${EZET_SSH_CONNECT_TIMEOUT}초"
+  fi
   if fetch_sessions; then
     TMUX_AVAILABLE=1
     via="$VIA_BASE"
     activity_stop success "$label 완료" "${count}개 세션"
   else
     TMUX_AVAILABLE=0
-    # tmux 를 못 쓰는 상태에서 VIA 가 Eternal Terminal 을 안내하면 오해를 준다(실제로는 SSH 셸만 가능).
+    # tmux 를 못 쓰는 상태에서 VIA 가 Eternal Terminal 을 안내하면 접속 가능한 것으로 오해할 수 있다.
     via="SSH (tmux 사용 불가)"
     activity_stop warning "$label 불가" "${FETCH_ERROR:-알 수 없는 오류}"
   fi
   build_session_rows
+  if is_tty; then clear_screen; fi
 }
 
 # ── 메인 ─────────────────────────────────────────────────────────
-trap 'stop_activity_silent; show_cursor' EXIT
+trap 'stop_activity_silent; dashboard_stop; show_cursor' EXIT
 trap 'exit 130' INT
 trap 'exit 129' HUP
 trap 'exit 143' TERM
@@ -1638,6 +2037,10 @@ if ! config_ensure; then
   echo "ezet: 전용 SSH config를 준비하지 못했습니다." >&2
   exit 1
 fi
+
+# 직접 세션명을 지정한 빠른 접속은 일반 CLI처럼 두고, 호스트/세션 선택이 필요한
+# 대화형 실행만 독립된 TUI 화면으로 연다.
+if [ "$#" -lt 2 ]; then dashboard_start; fi
 
 if [ "$#" -eq 0 ]; then
   host="$(pick_host)" || { echo "취소됨." >&2; exit 0; }
@@ -1656,7 +2059,7 @@ if [ "$#" -eq 2 ]; then
 fi
 
 addr=$(resolve_address) || addr="(unresolved)"
-if [ "$(connection_transport "$host")" = et ]; then VIA_BASE="tmux: Eternal Terminal · shell: SSH"; else VIA_BASE="SSH"; fi
+if [ "$(connection_transport "$host")" = et ]; then VIA_BASE="Eternal Terminal"; else VIA_BASE="SSH"; fi
 via="$VIA_BASE"
 
 refresh_sessions 'tmux 세션 조회'
@@ -1664,20 +2067,22 @@ refresh_sessions 'tmux 세션 조회'
 target=""
 if is_tty; then
   while true; do
-    target=""; action=""
-    arrow_loop draw_sessions "$((count + 1))" "$TMUX_AVAILABLE" rename
+    target=""; action=""; chooser_count="$count"; chooser_mode=session
+    if [ "$TMUX_AVAILABLE" -eq 0 ]; then chooser_count=1; chooser_mode=fallback
+    else chooser_count=$((count + SESSION_ACTION_COUNT)); fi
+    arrow_loop draw_sessions "$chooser_count" "$TMUX_AVAILABLE" "$chooser_mode"
+    if [ "$A_ACTION" = item ] && [ "$TMUX_AVAILABLE" -eq 1 ] && [ "$A_IDX" -ge "$count" ]; then
+      case "${ROW_ACTION[$A_IDX]:-}" in
+        new) A_ACTION=new ;;
+        ssh) action=ssh ;;
+      esac
+    fi
     case "$A_ACTION" in
       cancel) echo "취소됨." >&2; exit 0 ;;
-      back)   clear_screen; exec "$0" ;;
-      ssh)    action=ssh ;;
-      preview)
-        ARROW_START=$A_IDX
-        if [ "$A_IDX" -lt "$count" ]; then preview_session "${names[$A_IDX]}"
-        else clear_screen; fi
-        continue ;;
+      back)   dashboard_stop; exec "$0" ;;
       item)
-        if [ "$A_IDX" -eq "$count" ]; then action=ssh
-        else target="${names[$A_IDX]}"
+        if [ "$TMUX_AVAILABLE" -eq 0 ]; then action=ssh
+        elif [ "$action" != ssh ]; then target="${names[$A_IDX]}"
         fi ;;
       new)
         while true; do
@@ -1688,16 +2093,11 @@ if is_tty; then
           echo "  잘못된 이름(영문/숫자/._- 만)." >&2
         done
         if [ -z "$target" ]; then ARROW_START=$A_IDX; clear_screen; continue; fi ;;
-      rename)
+      edit)
         ARROW_START=$A_IDX
-        if [ "$A_IDX" -ge "$count" ]; then
-          echo "  SSH SHELL 항목은 이름을 변경할 수 없습니다." >&2
-          clear_screen
-          continue
-        fi
         old="${names[$A_IDX]}"
         if ! valid_name "$old"; then
-          echo "  이 세션명은 ezet에서 안전하게 변경할 수 없습니다: $old" >&2
+          echo "  이 세션명은 ezet에서 안전하게 수정할 수 없습니다: $old" >&2
           continue
         fi
         printf "  '%s' 의 새 이름 (Enter=취소): " "$old" >&2
@@ -1707,12 +2107,12 @@ if is_tty; then
           rename_ok=0
           tmux_bin="${REMOTE_TMUX:-}"
           if ! valid_remote_tmux_path "$tmux_bin"; then
-            echo "  이름변경 실패(원격 tmux 경로를 확인할 수 없음)." >&2
+            echo "  수정 실패(원격 tmux 경로를 확인할 수 없음)." >&2
           elif ssh -n "${SSH_CONNECT_OPTIONS[@]}" "$host" "'$tmux_bin' rename-session -t '$old' '$nn'" 2>/dev/null; then
             echo "  변경됨: $old → $nn" >&2
             rename_ok=1
           else
-            echo "  이름변경 실패(중복 이름 등)." >&2
+            echo "  수정 실패(중복 이름 등)." >&2
           fi
           if [ "$rename_ok" -eq 1 ]; then refresh_sessions '세션 목록 새로고침'; fi
           clear_screen
@@ -1722,27 +2122,29 @@ if is_tty; then
         continue ;;
     esac
 
-    # SSH SHELL 정상 종료는 ezet도 끝낸다. 연결 실패(ssh 255)만 재시도를 위해 돌아온다.
-    # tmux attach/detach 종료는 기존처럼 세션 선택 화면을 새로고침한다.
-    clear_screen
+    # tmux attach/detach 종료 후 세션 선택 화면을 새로고침한다.
     connect_status=0
     keep_idx=$A_IDX
     if [ "$action" = ssh ]; then
+      dashboard_suspend
       connect_plain_ssh || connect_status=$?
       if [ "$connect_status" -eq 255 ]; then
+        dashboard_resume
         clear_screen
         ARROW_START=$keep_idx
-        echo "[$host] 연결 실패 (status 255). 다시 시도하려면 Enter 또는 s를 누르세요." >&2
+        echo "[$host] 연결 실패 (status 255). 다시 시도하려면 Enter를 누르세요." >&2
         continue
       fi
       exit "$connect_status"
     fi
 
+    dashboard_suspend
     connect_session "$target" || connect_status=$?
+    dashboard_resume
     clear_screen
     ARROW_START=$keep_idx
     if [ "$connect_status" -ne 0 ]; then
-      echo "[$host] 연결 실패 (status $connect_status). 다시 시도하려면 Enter 또는 s를 누르세요." >&2
+      echo "[$host] 연결 실패 (status $connect_status). 다시 시도하려면 Enter를 누르세요." >&2
       continue
     fi
     refresh_sessions '세션 목록 새로고침'
@@ -1768,28 +2170,23 @@ else
   else
     i=0
     while [ "$i" -lt "$count" ]; do box_line_wide "${ROW_PLAIN[$i]}" "${ROW_REND[$i]}"; i=$((i + 1)); done
-    box_mid
   fi
-  box_line_wide "$SSH_ROW_PLAIN" "$SSH_ROW_REND"
   box_bot
   echo
   if [ "$TMUX_AVAILABLE" -eq 0 ] && [ -n "$FETCH_HINT" ]; then
     printf '  %s\n\n' "$FETCH_HINT"
   fi
   if [ "$TMUX_AVAILABLE" -eq 0 ]; then
-    printf '  선택 (s=SSH 셸 · Enter=취소): '
+    printf '  Enter를 누르면 종료합니다: '
   elif [ "$count" -eq 0 ]; then
-    printf '  새 세션 이름 (s=일반 SSH · Enter=취소): '
+    printf '  새 세션 이름 (Enter=취소): '
   else
-    printf '  세션 이름 (기존/새로 생성 · s=일반 SSH · Enter=취소): '
+    printf '  세션 이름 (기존/새로 생성 · Enter=취소): '
   fi
   read -r choice || { echo; exit 0; }
   [ -z "$choice" ] && { echo "취소됨." >&2; exit 0; }
-  case "$choice" in
-    s|S) connect_plain_ssh; exit $? ;;
-  esac
   if [ "$TMUX_AVAILABLE" -eq 0 ]; then
-    echo "tmux를 사용할 수 없습니다. 일반 SSH는 s를 입력하세요." >&2
+    echo "tmux를 사용할 수 없습니다." >&2
     exit 1
   fi
   target="$choice"
