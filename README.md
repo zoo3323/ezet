@@ -11,11 +11,19 @@ SSH·[Eternal Terminal](https://eternalterminal.dev/)·tmux 호스트와 세션�
 
 호스트 선택:
 
-<img src="docs/img/hosts.svg" alt="호스트 선택 화면" width="620">
+<img src="docs/img/hosts.svg" alt="호스트 선택 화면" width="780">
+
+검색으로 목록 좁히기:
+
+<img src="docs/img/search.svg" alt="호스트 검색 화면" width="780">
 
 tmux 세션 선택:
 
-<img src="docs/img/sessions.svg" alt="tmux 세션 선택 화면" width="760">
+<img src="docs/img/sessions.svg" alt="tmux 세션 선택 화면" width="780">
+
+새 호스트 추가:
+
+<img src="docs/img/add-host.svg" alt="새 호스트 추가 화면" width="780">
 
 ## 핵심 기능
 
@@ -47,7 +55,7 @@ ezet --doctor        # 설정 점검
 ezet --version
 ```
 
-화면에서는 방향키로 이동하고 `Enter`로 선택합니다. 호스트 화면에서 호스트를 추가·수정·삭제하고 순서를 변경할 수 있으며, 세션 화면에서 tmux 세션을 attach·생성하거나 SSH 셸로 직접 접속할 수 있습니다. 각 화면의 검색 행에서 목록을 필터링할 수 있습니다. `q`는 종료, `←`는 이전 화면입니다.
+화면에서는 방향키로 이동하고 `Enter`로 선택합니다. 호스트 화면에서 호스트를 추가·수정·삭제하고 순서를 변경할 수 있으며, 세션 화면에서 tmux 세션을 attach·생성하거나 `SSH Direct` 행으로 tmux 없이 접속할 수 있습니다. 각 화면의 `Search` 행에서 목록을 필터링할 수 있습니다. `q`는 종료, `←`는 이전 화면입니다.
 
 ## 외부망 포트포워딩
 
@@ -58,14 +66,14 @@ SSH와 ET는 서로 다른 포트가 필요합니다.
 공인IP:30002/TCP → 원격호스트:2022/TCP  (ET)
 ```
 
-호스트 추가·수정 시 접속 주소에 `30001 user@공인IP`, `ET 외부 포트`에 `30002`를 입력하세요. ET 포트를 열지 않으면 SSH만 사용되며, 절전·네트워크 전환 뒤 자동 재연결은 동작하지 않습니다.
+호스트 추가·수정 시 접속 주소에 `30001 user@공인IP`, `ET external port`에 `30002`를 입력하세요. ET 포트를 열지 않으면 SSH만 사용되며, 절전·네트워크 전환 뒤 자동 재연결은 동작하지 않습니다.
 
 ## 요구 사항
 
 - Bash 3.2+
 - OpenSSH (`ssh`)
 - Eternal Terminal (`et`, 선택)
-- 원격 `tmux` (선택; 없으면 SSH 셸)
+- 원격 `tmux` (선택; 없으면 `SSH Direct` 로 접속)
 
 로컬 tmux는 필요하지 않습니다.
 

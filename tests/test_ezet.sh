@@ -28,18 +28,21 @@ chmod +x "$fake_et_bin/et"
 expect <<'EXPECT'
 set timeout 3
 spawn env HOME=$env(EZET_TEST_HOME) NO_COLOR=1 $env(EZET_TEST_BIN)
-expect "접속 주소*"
+expect "ADD HOST*step 1 of 2*"
+expect "ADDRESS*"
 send "30001 user@203.0.113.10\r"
 expect {
-  "ET 외부 포트*" { send "32022\r" }
-  "별칭*" { exit 10 }
-  "잘못된 접속 주소*" { exit 10 }
-  "SSH 외부 포트*" { exit 11 }
+  -re {ADD HOST +step 2 of 3} { }
+  "Invalid address*" { exit 10 }
   timeout { exit 12 }
 }
-expect "별칭*"
+expect {
+  -re {ET PORT +▸} { send "32022\r" }
+  timeout { exit 13 }
+}
+expect -re {ALIAS +▸}
 send "host-ext\r"
-expect "추가됨*"
+expect "Added*"
 send "q"
 expect eof
 EXPECT
@@ -59,14 +62,14 @@ set timeout 3
 spawn env HOME=$env(EZET_TEST_HOME) NO_COLOR=1 $env(EZET_TEST_BIN)
 expect "SSH HOSTS*"
 send "\033\[B\r"
-expect "접속 주소*"
+expect "ADDRESS*"
 send "user@192.0.2.20\r"
 expect {
-  "별칭*" { send "host-a\r" }
-  "SSH 외부 포트*" { exit 30 }
+  -re {ALIAS +▸} { send "host-a\r" }
+  "ET PORT*" { exit 30 }
   timeout { exit 31 }
 }
-expect "추가됨*"
+expect "Added*"
 send "q"
 expect eof
 EXPECT
@@ -114,10 +117,10 @@ spawn env HOME=$env(EZET_TEST_HOME) NO_COLOR=1 $env(EZET_TEST_BIN)
 expect "SSH HOSTS*"
 send "d"
 expect {
-  "정말 삭제할까요*" { send "y\r" }
+  "Really delete*" { send "y\r" }
   timeout { exit 40 }
 }
-expect "삭제됨*"
+expect "Deleted*"
 send "q"
 expect eof
 EXPECT
@@ -138,13 +141,14 @@ set timeout 3
 spawn env HOME=$env(EZET_TEST_HOME) NO_COLOR=1 $env(EZET_TEST_BIN)
 expect "SSH HOSTS*"
 send "e"
-expect "입력 (Enter=현재값, q=취소):*"
+expect "EDIT HOST*step 1 of 3*"
+expect -re {ADDRESS +▸}
 send "30002 user@198.51.100.20\r"
-expect "ET 외부 포트*"
+expect -re {ET PORT +▸}
 send "32023\r"
-expect "별칭*"
+expect -re {ALIAS +▸}
 send "host-edit\r"
-expect "변경됨*"
+expect "Changed*"
 send "q"
 expect eof
 EXPECT
@@ -164,13 +168,17 @@ set timeout 3
 spawn env HOME=$env(EZET_TEST_HOME) NO_COLOR=1 $env(EZET_TEST_BIN)
 expect "SSH HOSTS*"
 send "e"
-expect "입력 (Enter=현재값, q=취소):*"
+expect -re {ADDRESS +▸}
 send "\r"
-expect "ET 외부 포트*"
+expect {
+  -re {Enter = keep 32023} { }
+  timeout { exit 24 }
+}
+expect -re {ET PORT +▸}
 send -- "-\r"
-expect "별칭*"
+expect -re {ALIAS +▸}
 send "\r"
-expect "변경됨*"
+expect "Changed*"
 send "q"
 expect eof
 EXPECT
@@ -198,11 +206,11 @@ set timeout 3
 spawn env HOME=$env(EZET_TEST_HOME) NO_COLOR=1 $env(EZET_TEST_BIN)
 expect "SSH HOSTS*"
 send "\033\[B\033\[B\r"
-expect "접속 주소*"
+expect "ADDRESS*"
 send "user@198.51.100.7\r"
-expect "별칭*"
+expect -re {ALIAS +▸}
 send "host-b\r"
-expect "추가됨*"
+expect "Added*"
 send "q"
 expect eof
 EXPECT
@@ -218,12 +226,16 @@ expect <<'EXPECT'
 set timeout 3
 spawn env HOME=$env(EZET_TEST_HOME) NO_COLOR=1 $env(EZET_TEST_BIN)
 expect "SSH HOSTS*"
-expect "검색  호스트 이름 또는 주소*"
+expect "Search  host name or address*"
+expect {
+  -re {HOST +USER +ADDRESS +VIA} {}
+  timeout { exit 80 }
+}
 send "\033\[A"
-expect -re {› 검색}
+expect -re {› Search}
 send "host-b"
 expect "SSH HOSTS (1/3)*"
-expect -re {› 검색  host-b}
+expect -re {› Search  host-b}
 send "\033\[B"
 expect -re {› host-b}
 send "q"
@@ -236,7 +248,7 @@ expect <<'EXPECT'
 set timeout 3
 spawn env HOME=$env(EZET_TEST_HOME) NO_COLOR=1 $env(EZET_TEST_BIN)
 expect "SSH HOSTS*"
-expect "e 수정*d 삭제*o 순서*"
+expect "e edit*d delete*o reorder*"
 send "o"
 expect "HOST ORDER*"
 send "\033\[B"
@@ -295,7 +307,7 @@ case "${EZET_FAKE_SSH_MODE:-sessions}" in
       '__DT_CONNECTED__' \
       '__DT_TMUX__=/usr/bin/tmux' \
       '__DT_NOW__=1700000000' \
-      '__DT_SESSION__|work|1||1699999900|bash|/home/user'
+      '__DT_SESSION__|work|1||1699999900|1699993000|bash|/home/user/work/app'
     ;;
   empty)
     printf '%s\n' \
@@ -308,14 +320,14 @@ case "${EZET_FAKE_SSH_MODE:-sessions}" in
       '__DT_CONNECTED__' \
       '__DT_TMUX__=/usr/bin/tmux' \
       '__DT_NOW__=1700000000' \
-      '__DT_SESSION__|alpha|1||1699999900|bash|/home/user' \
-      '__DT_SESSION__|bravo|1||1699999900|bash|/home/user'
+      '__DT_SESSION__|alpha|1||1699999900|1699993000|bash|/home/user/work/app' \
+      '__DT_SESSION__|bravo|1||1699999900|1699993000|bash|/home/user'
     ;;
   hostile)
     # 악의적 원격: 세션명에 '|' 와 산술 주입(now[$(...)]) , ANSI 이스케이프를 섞는다.
     printf '%s\n' '__DT_CONNECTED__' '__DT_TMUX__=/usr/bin/tmux' '__DT_NOW__=1700000000'
-    printf '__DT_SESSION__|we|ird|2|attached|now[$(touch %s)]|bash|/srv/app\n' "$EZET_PWN_MARK"
-    printf '__DT_SESSION__|\033[31mred\033[0m|1||1699999900|bash|/srv/x\n'
+    printf '__DT_SESSION__|we|ird|2|attached|now[$(touch %s)]|age[$(touch %s)]|bash|/srv/app\n' "$EZET_PWN_MARK" "$EZET_PWN_MARK"
+    printf '__DT_SESSION__|\033[31mred\033[0m|1||1699999900|1699993000|bash|/srv/x\n'
     ;;
   notmux)
     printf "%s\n" "__DT_CONNECTED__" "__DT_NO_TMUX__"
@@ -343,48 +355,67 @@ expect -exact "\033\[?1049h"
 expect "SSH HOSTS*"
 send "\r"
 expect "\033\[2J\033\[H"
-expect "SSH 인증 확인*"
-expect "tmux 세션 조회 완료*"
+expect "SSH auth check*"
+expect "Fetched tmux sessions*"
 expect "\033\[2J\033\[H"
 expect "work*"
-expect "← 뒤로*"
-expect "e 수정*q 종료*"
-expect "새 세션"
-expect "SSH 셸"
+expect "← back*"
+expect "e edit*q quit*"
+expect "New Session"
+expect "SSH Direct"
 send "\r"
 expect -exact "\033\[?1049l"
-expect "SSH + TMUX*연결 중*"
+expect "SSH + TMUX*connecting*"
 expect -exact "\033\[?1049h"
-expect "SSH 인증 확인*"
+expect "SSH auth check*"
 expect "work*"
 send "q"
 expect -exact "\033\[?1049l"
 expect eof
 EXPECT
 
-# 세션 목록 아래의 SSH 셸 탭은 방향키로 선택해 일반 SSH로 접속할 수 있어야 한다.
+# 세션 목록 아래의 `SSH 직접 연결` 행은 방향키로 선택해 일반 SSH로 접속할 수 있어야 한다.
 expect <<'EXPECT'
 set timeout 5
 spawn env HOME=$env(EZET_TEST_HOME) PATH=$env(EZET_FAKE_PATH) NO_COLOR=1 EZET_FAKE_SSH_MODE=sessions EZET_FAKE_SSH_LOG=$env(EZET_FAKE_SSH_LOG) $env(EZET_TEST_BIN) host-b
-expect "tmux 세션 조회 완료*"
+expect "Fetched tmux sessions*"
 expect -re {› alpha}
 send "\033\[B\033\[B\033\[B"
-expect -re {› SSH 셸  직접 연결}
+expect -re {› SSH Direct}
 send "\r"
 expect eof
 EXPECT
 
-# 세션이 하나도 없어도 목록 아래의 `＋ 새 세션` 행으로 새 세션 입력을 열 수 있어야 한다.
+# 세션이 하나도 없어도 목록 마지막의 `＋ New Session` 행으로 새 세션 입력을 열 수 있어야 한다.
 expect <<'EXPECT'
 set timeout 5
 spawn env HOME=$env(EZET_TEST_HOME) PATH=$env(EZET_FAKE_PATH) NO_COLOR=1 EZET_FAKE_SSH_MODE=empty EZET_FAKE_SSH_LOG=$env(EZET_FAKE_SSH_LOG) $env(EZET_TEST_BIN) host-b
-expect "tmux 세션 조회 완료*"
+expect "Fetched tmux sessions*"
 expect "no active tmux sessions*"
-expect "q 종료*"
+expect "q quit*"
 send "\r"
-expect "새 세션 이름*"
+expect "New session name*"
 send "\r"
 expect "no active tmux sessions*"
+send "q"
+expect eof
+EXPECT
+
+# 넓은 창(≥88칸)에서는 세션 표에 AGE 컬럼이 펼쳐지고, DIR 은 마지막 이름이 아니라
+# 홈을 `~` 로 줄인 전체 경로를 보여야 한다. 좁은 창에서는 AGE 없이 그린다.
+expect <<'EXPECT'
+set timeout 5
+spawn env HOME=$env(EZET_TEST_HOME) PATH=$env(EZET_FAKE_PATH) NO_COLOR=1 EZET_FAKE_SSH_MODE=sessions EZET_FAKE_SSH_LOG=$env(EZET_FAKE_SSH_LOG) $env(EZET_TEST_BIN) host-b
+stty columns 100 rows 40 < $spawn_out(slave,name)
+expect "Fetched tmux sessions*"
+expect {
+  -re {IDLE +AGE +CMD +DIR} {}
+  timeout { exit 81 }
+}
+expect {
+  -re {~/work/app} {}
+  timeout { exit 82 }
+}
 send "q"
 expect eof
 EXPECT
@@ -393,11 +424,11 @@ EXPECT
 expect <<'EXPECT'
 set timeout 5
 spawn env HOME=$env(EZET_TEST_HOME) PATH=$env(EZET_FAKE_PATH) NO_COLOR=1 EZET_FAKE_SSH_MODE=sessions EZET_FAKE_SSH_LOG=$env(EZET_FAKE_SSH_LOG) $env(EZET_TEST_BIN) host-b
-expect "SSH 인증 확인*"
-expect "tmux 세션 조회 완료*"
+expect "SSH auth check*"
+expect "Fetched tmux sessions*"
 expect -re {› work}
 send "\033\[A"
-expect -re {› 검색}
+expect -re {› Search}
 send "\033\[D"
 expect "SSH HOSTS*"
 send "q"
@@ -408,12 +439,12 @@ EXPECT
 expect <<'EXPECT'
 set timeout 5
 spawn env HOME=$env(EZET_TEST_HOME) PATH=$env(EZET_FAKE_PATH) NO_COLOR=1 EZET_FAKE_SSH_MODE=sessions EZET_FAKE_SSH_LOG=$env(EZET_FAKE_SSH_LOG) $env(EZET_TEST_BIN) host-b
-expect "tmux 세션 조회 완료*"
+expect "Fetched tmux sessions*"
 expect -re {› alpha}
 send "\033\[A"
-expect -re {› 검색}
+expect -re {› Search}
 send "no-match"
-expect -re {검색  no-match}
+expect -re {Search  no-match}
 send "\033\[B"
 expect -re {› alpha}
 send "q"
@@ -425,19 +456,19 @@ printf '' > "$fake_ssh_log"
 expect <<'EXPECT'
 set timeout 5
 spawn env HOME=$env(EZET_TEST_HOME) PATH=$env(EZET_FAKE_PATH) NO_COLOR=1 EZET_FAKE_SSH_MODE=multi EZET_FAKE_SSH_LOG=$env(EZET_FAKE_SSH_LOG) $env(EZET_TEST_BIN) host-b
-expect "tmux 세션 조회 완료*"
+expect "Fetched tmux sessions*"
 expect -re {› alpha}
 send "\033\[A"
-expect -re {› 검색}
+expect -re {› Search}
 send "bravo"
-expect -re {› 검색  bravo}
+expect -re {› Search  bravo}
 send "\033\[B"
 expect -re {› bravo}
 send "e"
-expect "'bravo' 의 새 이름*"
+expect "New name for 'bravo'*"
 send "charlie\r"
-expect "변경됨: bravo → charlie*"
-expect "세션 목록 새로고침 완료*"
+expect "Renamed: bravo -> charlie*"
+expect "Fetched the session list*"
 send "q"
 expect eof
 EXPECT
@@ -467,7 +498,7 @@ esac
 
 # 실패 사유는 케이스별로 구분해 표기하고 조치 안내를 함께 보여줘야 한다.
 #   비POSIX 셸(Windows) vs 원격에 tmux 없음
-for mode_case in "windows:Windows 등 비POSIX 셸" "notmux:원격에 tmux 없음" "timeout:연결 실패 · 응답 없음"; do
+for mode_case in "windows:non-POSIX shell (e.g. Windows)" "notmux:no tmux on the remote" "timeout:connection failed · no response"; do
   mode=${mode_case%%:*}; want=${mode_case#*:}
   # 사유 분류만 확인하므로 모드별로 빈 로그를 써서 재시도 지연을 피한다.
   case_log="$tmp/fake-ssh.$mode.log"; : > "$case_log"
@@ -478,16 +509,16 @@ for mode_case in "windows:Windows 등 비POSIX 셸" "notmux:원격에 tmux 없�
     *) printf 'expected fetch failure label %s for mode %s\n' "$want" "$mode" >&2; exit 90 ;;
   esac
   case "$mode" in
-    timeout) hint_want="확인하세요" ;;
-    windows) hint_want="사용할 수 없습니다" ;;
-    notmux)  hint_want="설치한 뒤" ;;
+    timeout) hint_want="Check that the host is up" ;;
+    windows) hint_want="tmux sessions are unavailable" ;;
+    notmux)  hint_want="Install tmux on the remote" ;;
   esac
   case "$out" in
     *"$hint_want"*) ;;
     *) printf 'expected actionable hint for mode %s\n' "$mode" >&2; exit 91 ;;
   esac
   case "$out" in
-    *"tmux 사용 불가"*) ;;
+    *"tmux unavailable"*) ;;
     *) printf 'expected korean unavailable label for mode %s\n' "$mode" >&2; exit 92 ;;
   esac
 done
@@ -497,14 +528,14 @@ printf '' > "$fake_ssh_log"
 expect <<'EXPECT'
 set timeout 5
 spawn env HOME=$env(EZET_TEST_HOME) PATH=$env(EZET_FAKE_PATH) NO_COLOR=1 EZET_FAKE_SSH_MODE=windows EZET_FAKE_SSH_LOG=$env(EZET_FAKE_SSH_LOG) $env(EZET_TEST_BIN) host-b
-expect "tmux 세션 조회 불가*"
+expect "Cannot fetch tmux sessions*"
 expect {
-  "SSH 셸*" {}
+  "SSH Direct*" {}
   timeout { exit 110 }
 }
 send "\r"
 expect {
-  "SSH SHELL*연결 중*" {}
+  "SSH SHELL*connecting*" {}
   timeout { exit 111 }
   eof { exit 112 }
 }
@@ -519,10 +550,10 @@ printf '' > "$fake_ssh_log"
 expect <<'EXPECT'
 set timeout 5
 spawn env HOME=$env(EZET_TEST_HOME) PATH=$env(EZET_FAKE_PATH) NO_COLOR=1 EZET_FAKE_SSH_MODE=windows EZET_FAKE_SSH_LOG=$env(EZET_FAKE_SSH_LOG) $env(EZET_TEST_BIN) host-b
-expect "SSH 인증 확인*"
-expect "tmux 세션 조회 불가*"
+expect "SSH auth check*"
+expect "Cannot fetch tmux sessions*"
 expect "tmux unavailable*"
-expect "← 뒤로*"
+expect "← back*"
 send "\033\[D"
 expect "SSH HOSTS*"
 send "q"
@@ -533,7 +564,7 @@ EXPECT
 no_animation_output=$(printf '\n' | HOME="$tmp" PATH="$EZET_FAKE_PATH" NO_COLOR=1 EZET_NO_ANIMATION=1 \
   EZET_FAKE_SSH_MODE=windows EZET_FAKE_SSH_LOG="$fake_ssh_log" "$EZET_BIN" host-b 2>&1)
 case "$no_animation_output" in
-  *"…  tmux 세션 조회 중"*"tmux 세션 조회 불가"*"Enter를 누르면 종료"*) ;;
+  *"…  Fetching tmux sessions"*"Cannot fetch tmux sessions"*"Press Enter to quit"*) ;;
   *) printf 'expected non-TTY activity status and dashboard, got: %s\n' "$no_animation_output" >&2; exit 72 ;;
 esac
 case "$no_animation_output" in
@@ -569,15 +600,32 @@ set timeout 3
 spawn env HOME=$env(EZET_LEGACY_TEST_HOME) NO_COLOR=1 $env(EZET_TEST_BIN)
 expect "SSH HOSTS*"
 send "\033\[B\r"
-expect "접속 주소*"
+expect "ADDRESS*"
 send "user@192.0.2.51\r"
-expect "별칭*"
+expect -re {ALIAS +▸}
 send "legacy\r"
 expect {
-  "이미 존재하는 별칭입니다*" { send "fresh\r" }
+  "Alias already exists*" { send "fresh\r" }
   timeout { exit 50 }
 }
-expect "추가됨*"
+expect "Added*"
+send "q"
+expect eof
+EXPECT
+
+# 메인 ~/.ssh/config 의 호스트는 ezet 에서 수정·삭제할 수 없으므로 VIA 칸 뒤에
+# `ro` 배지를 붙여 구분해야 한다(ezet 전용 config 호스트에는 붙지 않는다).
+expect <<'EXPECT'
+set timeout 3
+spawn env HOME=$env(EZET_LEGACY_TEST_HOME) NO_COLOR=1 $env(EZET_TEST_BIN)
+expect {
+  -re {HOST +USER +ADDRESS +VIA} {}
+  timeout { exit 83 }
+}
+expect {
+  -re {legacy .*192\.0\.2\.50 .*ro} {}
+  timeout { exit 84 }
+}
 send "q"
 expect eof
 EXPECT
@@ -619,7 +667,7 @@ grep -q 'kept-host' "$un_tmp/.ssh/config.d/ezet" || { printf 'uninstall must kee
 [ -f "$un_tmp/.ssh/config.ezet-backup" ] || { printf 'uninstall must keep the backup\n' >&2; exit 103; }
 # 멱등: 두 번째 실행은 되돌릴 것이 없다고 알려야 한다.
 again=$(printf 'y\n' | HOME="$un_tmp" "$EZET_BIN" --uninstall 2>&1 || true)
-case "$again" in *"되돌릴 것이 없습니다"*) ;; *) printf 'uninstall must be idempotent\n' >&2; exit 104 ;; esac
+case "$again" in *"Nothing to undo"*) ;; *) printf 'uninstall must be idempotent\n' >&2; exit 104 ;; esac
 rm -rf "$un_tmp"
 
 printf 'ezet regression tests: PASS\n'

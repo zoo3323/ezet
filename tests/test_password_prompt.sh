@@ -49,12 +49,12 @@ spawn env HOME=$env(EZET_PROMPT_HOME) PATH=$env(EZET_PROMPT_PATH) TERM=xterm-256
 
 # 인증 가능한 SSH 호출 중에는 스피너가 아니라 입력/대기 상태를 구분하는 고정 안내가 먼저 보여야 한다.
 expect {
-  -re {SSH 인증 확인[^\r\n]*} {}
-  -re {tmux 세션 조회 중[^\r\n]*} { exit 120 }
+  -re {SSH auth check[^\r\n]*} {}
+  -re {Fetching tmux sessions[^\r\n]*} { exit 120 }
   timeout { exit 121 }
 }
 expect {
-  -re {비밀번호 요청 시 입력하세요[^\r\n]*} {}
+  -re {Type your password if prompted[^\r\n]*} {}
   timeout { exit 122 }
 }
 expect {
@@ -65,13 +65,13 @@ expect {
 # 프롬프트가 열린 뒤에도 스피너가 다시 덮어쓰면 안 된다.
 set timeout 1
 expect {
-  -re {tmux 세션 조회 중[^\r\n]*} { exit 124 }
+  -re {Fetching tmux sessions[^\r\n]*} { exit 124 }
   timeout {}
 }
 set timeout 5
 send "test-password\r"
-expect "tmux 세션 조회 불가*"
-expect "SSH 셸*"
+expect "Cannot fetch tmux sessions*"
+expect "SSH Direct*"
 send "q"
 expect eof
 EXPECT
