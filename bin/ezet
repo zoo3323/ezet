@@ -15,7 +15,7 @@
 # EZET_DRYRUN=1 prints the target instead of connecting (for tests).
 set -euo pipefail
 
-EZET_VERSION="1.0.0"
+EZET_VERSION="1.0.1"
 
 # ── Dedicated SSH config module ──────────────────────────────────
 # Public interface: config_ensure, config_include_present
@@ -142,7 +142,12 @@ run_doctor() {
   os=$(uname -s 2>/dev/null || printf unknown)
   case "$os" in
     Darwin|Linux) doctor_ok "OS: $os" ;;
-    *) doctor_fail "unsupported OS: $os (supported: macOS, Linux)" ;;
+    # Git Bash/MSYS2 report MINGW*/MSYS*. ezet is not tested there, and the Include
+    # line it writes uses an MSYS path (/c/Users/...) that Windows OpenSSH cannot
+    # resolve. WSL reports Linux and takes the branch above.
+    MINGW*|MSYS*|CYGWIN*)
+      doctor_fail "unsupported OS: $os (Git Bash/MSYS2 is not supported - run ezet under WSL)" ;;
+    *) doctor_fail "unsupported OS: $os (supported: macOS, Linux, WSL)" ;;
   esac
 
   if [ "${BASH_VERSINFO[0]:-0}" -gt 3 ] || { [ "${BASH_VERSINFO[0]:-0}" -eq 3 ] && [ "${BASH_VERSINFO[1]:-0}" -ge 2 ]; }; then

@@ -711,6 +711,37 @@ if [ "$(sed -n '1,$p' "$form_tmp/.ssh/config.d/ezet")" != "$before" ]; then
 fi
 rm -rf "$form_tmp"
 
+# The doctor accepts macOS/Linux (WSL reports Linux) and rejects anything else.
+# Git Bash/MSYS2 gets a distinct message: the Include line ezet writes uses an MSYS
+# path that Windows OpenSSH cannot resolve, so WSL is the supported route.
+os_tmp=$(mktemp -d)
+mkdir -p "$os_tmp/bin"
+cat > "$os_tmp/bin/uname" <<'FAKE_UNAME'
+#!/usr/bin/env bash
+case "${1:-}" in
+  -s) printf '%s\n' "${FAKE_OS:-Linux}" ;;
+  *)  printf '%s\n' "${FAKE_OS:-Linux}" ;;
+esac
+FAKE_UNAME
+chmod +x "$os_tmp/bin/uname"
+
+os_out=$(FAKE_OS='MINGW64_NT-10.0' PATH="$os_tmp/bin:$PATH" HOME="$tmp" "$EZET_BIN" --doctor 2>&1 || true)
+case "$os_out" in
+  *"Git Bash/MSYS2 is not supported"*) ;;
+  *) printf 'doctor must reject Git Bash/MSYS2 with its own hint, got: %s\n' "$os_out" >&2; exit 140 ;;
+esac
+os_out=$(FAKE_OS='SunOS' PATH="$os_tmp/bin:$PATH" HOME="$tmp" "$EZET_BIN" --doctor 2>&1 || true)
+case "$os_out" in
+  *"supported: macOS, Linux, WSL"*) ;;
+  *) printf 'doctor must reject an unknown OS, got: %s\n' "$os_out" >&2; exit 141 ;;
+esac
+os_out=$(FAKE_OS='Linux' PATH="$os_tmp/bin:$PATH" HOME="$tmp" "$EZET_BIN" --doctor 2>&1 || true)
+case "$os_out" in
+  *"[ok]   OS: Linux"*) ;;
+  *) printf 'doctor must accept Linux (this is what WSL reports), got: %s\n' "$os_out" >&2; exit 142 ;;
+esac
+rm -rf "$os_tmp"
+
 # --uninstall reverts only the Include line ezet added; the user's own settings,
 # host list and backup are never touched.
 un_tmp=$(mktemp -d)

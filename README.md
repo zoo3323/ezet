@@ -68,6 +68,21 @@ In the add and edit forms, `Enter` accepts the shown default, `<` steps back to 
 
 A local tmux is not needed.
 
+## Platforms
+
+ezet runs on **macOS and Linux** (WSL included, since it reports itself as Linux).
+Both are covered by the CI matrix on every push.
+
+It does **not** run on Windows natively: `--doctor` rejects Git Bash/MSYS2, because
+the `Include` line ezet writes uses an MSYS path (`/c/Users/...`) that Windows
+OpenSSH cannot resolve. Use WSL there.
+
+A **Windows host on the remote side is supported**. Its shell is not POSIX, so the
+tmux query cannot run; ezet detects that, reports `non-POSIX shell (e.g. Windows)`
+and offers the `SSH Direct` row to connect without tmux. This path is covered by the
+test suite with a stub that reproduces the real cmd.exe behaviour (it runs only the
+first line of a multi-line command and still exits 0).
+
 ## SSH config
 
 ezet hosts live in `~/.ssh/config.d/ezet`. Your existing config only gains a single `Include` line, and it is backed up before the change. ET ports are stored as a comment:

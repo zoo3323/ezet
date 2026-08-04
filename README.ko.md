@@ -68,6 +68,20 @@ ezet --version
 
 로컬 tmux는 필요하지 않습니다.
 
+## 지원 플랫폼
+
+ezet은 **macOS와 Linux**에서 동작합니다(WSL 포함 — WSL은 스스로를 Linux로 보고합니다).
+두 환경 모두 푸시마다 CI 매트릭스로 검증됩니다.
+
+**윈도우에서 직접 실행하는 것은 지원하지 않습니다.** `--doctor`가 Git Bash·MSYS2를
+거부합니다. ezet이 기록하는 `Include` 줄이 MSYS 경로(`/c/Users/...`)여서 Windows
+OpenSSH가 해석할 수 없기 때문입니다. 윈도우에서는 WSL을 쓰세요.
+
+**원격 호스트가 윈도우인 경우는 지원합니다.** 셸이 POSIX가 아니라 tmux 조회를 실행할
+수 없는데, ezet이 이를 감지해 `non-POSIX shell (e.g. Windows)`로 표시하고 tmux 없이
+접속하는 `SSH Direct` 행을 제공합니다. 이 경로는 실제 cmd.exe 동작(여러 줄 명령의 첫
+줄만 실행하고 종료코드 0)을 재현하는 대역으로 테스트에서 검증합니다.
+
 ## SSH 설정
 
 ezet 호스트는 `~/.ssh/config.d/ezet`에 저장됩니다. 기존 설정에는 `Include` 한 줄만 추가하며, 변경 전 백업을 만듭니다. ET 포트는 다음처럼 주석으로 저장됩니다.
