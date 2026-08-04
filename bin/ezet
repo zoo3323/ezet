@@ -13,7 +13,7 @@
 # 환경변수 EZET_DRYRUN=1 이면 실제 접속 대신 대상만 출력(테스트용).
 set -euo pipefail
 
-EZET_VERSION="0.1.21"
+EZET_VERSION="1.0.0"
 
 # ── 전용 SSH config 모듈 ──────────────────────────────────────────
 # 공개 인터페이스: config_ensure, config_include_present
