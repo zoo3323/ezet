@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="816.8" height="324.0" viewBox="0 0 816.8 324.0" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" xml:space="preserve">
-<rect width="816.8" height="324.0" rx="10" fill="#0f141a"/>
-<rect y="34.0" width="816.8" height="290.0" fill="#151a21"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="816.8" height="343.0" viewBox="0 0 816.8 343.0" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" xml:space="preserve">
+<rect width="816.8" height="343.0" rx="10" fill="#0f141a"/>
+<rect y="34.0" width="816.8" height="309.0" fill="#151a21"/>
 <circle cx="20" cy="17" r="5.5" fill="#ff5f57"/>
 <circle cx="38" cy="17" r="5.5" fill="#febc2e"/>
 <circle cx="56" cy="17" r="5.5" fill="#28c840"/>
@@ -17,7 +17,7 @@
 <text x="138.4 147 155.6 164.2 172.8 181.4 190 198.6 207.2" y="59.3" fill="#56b6c2" font-size="14.5" xml:space="preserve" opacity="0.55">SSH HOSTS</text>
 <text x="18 26.6 35.2 43.8 52.4 61 69.6 78.2 86.8 95.4 104 112.6 121.2 129.8 138.4 147 155.6 164.2 172.8 181.4 190 198.6 207.2 215.8 224.4 233 241.6 250.2 258.8 267.4 276 284.6 293.2 301.8 310.4 319 327.6 336.2 344.8 353.4 362 370.6 379.2 387.8 396.4 405 413.6 422.2 430.8 439.4 448 456.6 465.2 473.8 482.4 491 499.6 508.2 516.8 525.4 534 542.6 551.2 559.8 568.4 577 585.6 594.2 602.8 611.4 620 628.6 637.2 645.8 654.4 663 671.6 680.2 688.8 697.4 706 714.6 723.2 731.8 740.4 749 757.6 766.2" y="78.3" fill="#5a6472" font-size="14.5" xml:space="preserve">╭──────────────────────────────────────────────────────────────────────────────────────╮</text>
 <text x="18" y="97.3" fill="#5a6472" font-size="14.5" xml:space="preserve">│</text>
-<text x="43.8 52.4 61 69.6 78.2 86.8 95.4 104 112.6 121.2 129.8 138.4 147" y="97.3" fill="#c3ccd8" font-size="14.5" xml:space="preserve" font-weight="600">SSH HOSTS (2)</text>
+<text x="43.8 52.4 61 69.6 78.2 86.8 95.4 104 112.6 121.2 129.8 138.4 147" y="97.3" fill="#c3ccd8" font-size="14.5" xml:space="preserve" font-weight="600">SSH HOSTS (4)</text>
 <text x="766.2" y="97.3" fill="#5a6472" font-size="14.5" xml:space="preserve">│</text>
 <text x="18 26.6 35.2 43.8 52.4 61 69.6 78.2 86.8 95.4 104 112.6 121.2 129.8 138.4 147 155.6 164.2 172.8 181.4 190 198.6 207.2 215.8 224.4 233 241.6 250.2 258.8 267.4 276 284.6 293.2 301.8 310.4 319 327.6 336.2 344.8 353.4 362 370.6 379.2 387.8 396.4 405 413.6 422.2 430.8 439.4 448 456.6 465.2 473.8 482.4 491 499.6 508.2 516.8 525.4 534 542.6 551.2 559.8 568.4 577 585.6 594.2 602.8 611.4 620 628.6 637.2 645.8 654.4 663 671.6 680.2 688.8 697.4 706 714.6 723.2 731.8 740.4 749 757.6 766.2" y="116.3" fill="#5a6472" font-size="14.5" xml:space="preserve">├──────────────────────────────────────────────────────────────────────────────────────┤</text>
 <text x="18" y="135.3" fill="#5a6472" font-size="14.5" xml:space="preserve">│</text>
@@ -32,26 +32,36 @@
 <text x="43.8 52.4 61" y="192.3" fill="#56b6c2" font-size="14.5" xml:space="preserve" font-weight="600">dev</text>
 <text x="164.2 172.8 181.4" y="192.3" fill="#c3ccd8" font-size="14.5" xml:space="preserve" opacity="0.55">dev</text>
 <text x="250.2 258.8 267.4 276 284.6 293.2 301.8 310.4 319 327.6" y="192.3" fill="#c3ccd8" font-size="14.5" xml:space="preserve">192.0.2.10</text>
-<text x="663 671.6" y="192.3" fill="#e5c07b" font-size="14.5" xml:space="preserve">ET</text>
+<text x="663 671.6 680.2 688.8 697.4 706 714.6 723.2" y="192.3" fill="#e5c07b" font-size="14.5" xml:space="preserve">ET 32022</text>
 <text x="766.2" y="192.3" fill="#5a6472" font-size="14.5" xml:space="preserve">│</text>
 <text x="18" y="211.3" fill="#5a6472" font-size="14.5" xml:space="preserve">│</text>
 <text x="43.8 52.4 61 69.6 78.2 86.8 95.4" y="211.3" fill="#56b6c2" font-size="14.5" xml:space="preserve" font-weight="600">gpu-box</text>
-<text x="164.2 172.8 181.4" y="211.3" fill="#c3ccd8" font-size="14.5" xml:space="preserve" opacity="0.55">ops</text>
-<text x="250.2 258.8 267.4 276 284.6 293.2 301.8 310.4 319 327.6 336.2 344.8 353.4 362 370.6 379.2 387.8" y="211.3" fill="#c3ccd8" font-size="14.5" xml:space="preserve">203.0.113.8:30001</text>
-<text x="663 671.6 680.2 688.8 697.4 706 714.6 723.2" y="211.3" fill="#e5c07b" font-size="14.5" xml:space="preserve">ET 30002</text>
+<text x="164.2 172.8" y="211.3" fill="#c3ccd8" font-size="14.5" xml:space="preserve" opacity="0.55">ml</text>
+<text x="250.2 258.8 267.4 276 284.6 293.2 301.8 310.4 319 327.6" y="211.3" fill="#c3ccd8" font-size="14.5" xml:space="preserve">192.0.2.42</text>
+<text x="663 671.6" y="211.3" fill="#e5c07b" font-size="14.5" xml:space="preserve">ET</text>
 <text x="766.2" y="211.3" fill="#5a6472" font-size="14.5" xml:space="preserve">│</text>
 <text x="18" y="230.3" fill="#5a6472" font-size="14.5" xml:space="preserve">│</text>
-<text x="43.8 61 69.6 78.2 86.8 95.4 104 112.6 121.2 129.8" y="230.3" fill="#c3ccd8" font-size="14.5" xml:space="preserve" opacity="0.55">＋ New Host</text>
+<text x="43.8 52.4 61 69.6 78.2 86.8 95.4 104" y="230.3" fill="#56b6c2" font-size="14.5" xml:space="preserve" font-weight="600">gpu-farm</text>
+<text x="164.2 172.8" y="230.3" fill="#c3ccd8" font-size="14.5" xml:space="preserve" opacity="0.55">ml</text>
+<text x="250.2 258.8 267.4 276 284.6 293.2 301.8 310.4 319 327.6" y="230.3" fill="#c3ccd8" font-size="14.5" xml:space="preserve">192.0.2.43</text>
+<text x="663 671.6" y="230.3" fill="#e5c07b" font-size="14.5" xml:space="preserve">ET</text>
 <text x="766.2" y="230.3" fill="#5a6472" font-size="14.5" xml:space="preserve">│</text>
-<text x="18 26.6 35.2 43.8 52.4 61 69.6 78.2 86.8 95.4 104 112.6 121.2 129.8 138.4 147 155.6 164.2 172.8 181.4 190 198.6 207.2 215.8 224.4 233 241.6 250.2 258.8 267.4 276 284.6 293.2 301.8 310.4 319 327.6 336.2 344.8 353.4 362 370.6 379.2 387.8 396.4 405 413.6 422.2 430.8 439.4 448 456.6 465.2 473.8 482.4 491 499.6 508.2 516.8 525.4 534 542.6 551.2 559.8 568.4 577 585.6 594.2 602.8 611.4 620 628.6 637.2 645.8 654.4 663 671.6 680.2 688.8 697.4 706 714.6 723.2 731.8 740.4 749 757.6 766.2" y="249.3" fill="#5a6472" font-size="14.5" xml:space="preserve">╰──────────────────────────────────────────────────────────────────────────────────────╯</text>
-<text x="35.2" y="287.3" fill="#c3ccd8" font-size="14.5" xml:space="preserve" font-weight="600">e</text>
-<text x="52.4 61 69.6 78.2 86.8 95.4" y="287.3" fill="#c3ccd8" font-size="14.5" xml:space="preserve">edit ·</text>
-<text x="112.6" y="287.3" fill="#c3ccd8" font-size="14.5" xml:space="preserve" font-weight="600">d</text>
-<text x="129.8 138.4 147 155.6 164.2 172.8 181.4 190" y="287.3" fill="#c3ccd8" font-size="14.5" xml:space="preserve">delete ·</text>
-<text x="207.2" y="287.3" fill="#c3ccd8" font-size="14.5" xml:space="preserve" font-weight="600">o</text>
-<text x="224.4 233 241.6 250.2 258.8 267.4 276 284.6 293.2" y="287.3" fill="#c3ccd8" font-size="14.5" xml:space="preserve">reorder ·</text>
-<text x="310.4" y="287.3" fill="#c3ccd8" font-size="14.5" xml:space="preserve" font-weight="600">q</text>
-<text x="327.6 336.2 344.8 353.4" y="287.3" fill="#c3ccd8" font-size="14.5" xml:space="preserve">quit</text>
-<text x="35.2" y="306.3" fill="#98c379" font-size="14.5" xml:space="preserve">✓</text>
-<text x="52.4 61 69.6 78.2 86.8 95.4 104 112.6 121.2 129.8 138.4 147 155.6 164.2 172.8 181.4 190 198.6 207.2 215.8 224.4 233 241.6 250.2 258.8 267.4 276 284.6 293.2 301.8 310.4 319 327.6 336.2 344.8 353.4 362 370.6 379.2 387.8 396.4 405 413.6 422.2 430.8 439.4 448 456.6 465.2 473.8 482.4 491 499.6 508.2 516.8 525.4 534 542.6 551.2 559.8 568.4 577 585.6 594.2 602.8" y="306.3" fill="#c3ccd8" font-size="14.5" xml:space="preserve">Added: gpu-box -&gt; ops@203.0.113.8:30001 (external SSH · ET 30002)</text>
+<text x="18" y="249.3" fill="#5a6472" font-size="14.5" xml:space="preserve">│</text>
+<text x="43.8 52.4 61 69.6 78.2" y="249.3" fill="#56b6c2" font-size="14.5" xml:space="preserve" font-weight="600">web-1</text>
+<text x="164.2 172.8 181.4 190 198.6 207.2" y="249.3" fill="#c3ccd8" font-size="14.5" xml:space="preserve" opacity="0.55">deploy</text>
+<text x="250.2 258.8 267.4 276 284.6 293.2 301.8 310.4 319 327.6 336.2 344.8 353.4 362 370.6 379.2 387.8" y="249.3" fill="#c3ccd8" font-size="14.5" xml:space="preserve">203.0.113.8:30001</text>
+<text x="663 671.6 680.2" y="249.3" fill="#c3ccd8" font-size="14.5" xml:space="preserve" opacity="0.55">SSH</text>
+<text x="766.2" y="249.3" fill="#5a6472" font-size="14.5" xml:space="preserve">│</text>
+<text x="18" y="268.3" fill="#5a6472" font-size="14.5" xml:space="preserve">│</text>
+<text x="43.8 61 69.6 78.2 86.8 95.4 104 112.6 121.2 129.8" y="268.3" fill="#c3ccd8" font-size="14.5" xml:space="preserve" opacity="0.55">＋ New Host</text>
+<text x="766.2" y="268.3" fill="#5a6472" font-size="14.5" xml:space="preserve">│</text>
+<text x="18 26.6 35.2 43.8 52.4 61 69.6 78.2 86.8 95.4 104 112.6 121.2 129.8 138.4 147 155.6 164.2 172.8 181.4 190 198.6 207.2 215.8 224.4 233 241.6 250.2 258.8 267.4 276 284.6 293.2 301.8 310.4 319 327.6 336.2 344.8 353.4 362 370.6 379.2 387.8 396.4 405 413.6 422.2 430.8 439.4 448 456.6 465.2 473.8 482.4 491 499.6 508.2 516.8 525.4 534 542.6 551.2 559.8 568.4 577 585.6 594.2 602.8 611.4 620 628.6 637.2 645.8 654.4 663 671.6 680.2 688.8 697.4 706 714.6 723.2 731.8 740.4 749 757.6 766.2" y="287.3" fill="#5a6472" font-size="14.5" xml:space="preserve">╰──────────────────────────────────────────────────────────────────────────────────────╯</text>
+<text x="35.2" y="325.3" fill="#c3ccd8" font-size="14.5" xml:space="preserve" font-weight="600">e</text>
+<text x="52.4 61 69.6 78.2 86.8 95.4" y="325.3" fill="#c3ccd8" font-size="14.5" xml:space="preserve">edit ·</text>
+<text x="112.6" y="325.3" fill="#c3ccd8" font-size="14.5" xml:space="preserve" font-weight="600">d</text>
+<text x="129.8 138.4 147 155.6 164.2 172.8 181.4 190" y="325.3" fill="#c3ccd8" font-size="14.5" xml:space="preserve">delete ·</text>
+<text x="207.2" y="325.3" fill="#c3ccd8" font-size="14.5" xml:space="preserve" font-weight="600">o</text>
+<text x="224.4 233 241.6 250.2 258.8 267.4 276 284.6 293.2" y="325.3" fill="#c3ccd8" font-size="14.5" xml:space="preserve">reorder ·</text>
+<text x="310.4" y="325.3" fill="#c3ccd8" font-size="14.5" xml:space="preserve" font-weight="600">q</text>
+<text x="327.6 336.2 344.8 353.4" y="325.3" fill="#c3ccd8" font-size="14.5" xml:space="preserve">quit</text>
 </svg>
