@@ -4,6 +4,10 @@ English · [한국어](README.ko.md)
 
 An interactive CLI for picking SSH · [Eternal Terminal](https://eternalterminal.dev/) · tmux hosts and sessions. Pure Bash, and it falls back to plain SSH whenever ET is unavailable.
 
+- **tmux session management** — list, create and rename remote sessions, then attach right away.
+- **Auto-reconnect** — prefers Eternal Terminal (ET), so sessions survive a closed laptop lid or a network change.
+- **SSH fallback** — hosts without ET, or without a usable tmux, are reached over plain SSH.
+
 [![test](https://github.com/zoo3323/ezet/actions/workflows/test.yml/badge.svg)](https://github.com/zoo3323/ezet/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
@@ -26,12 +30,6 @@ Session picker:
 Adding a host:
 
 <img src="docs/img/add-host.svg" alt="add host screen" width="780">
-
-## What it does
-
-- **tmux session management** — list, create and rename remote sessions, then attach right away.
-- **Auto-reconnect** — prefers Eternal Terminal (ET), so sessions survive a closed laptop lid or a network change.
-- **SSH fallback** — hosts without ET, or without a usable tmux, are reached over plain SSH.
 
 ## Install
 
@@ -57,20 +55,9 @@ ezet --doctor        # check the setup
 ezet --version
 ```
 
-Move with the arrow keys and pick with `Enter`. The host screen adds, edits, deletes and reorders hosts; the session screen attaches or creates tmux sessions, or connects without tmux through the `SSH Direct` row. The `Search` row on each screen filters the list. `q` quits and `←` goes back to the previous screen.
+Move with the arrow keys and pick with `Enter`. The host screen adds, edits, deletes and reorders hosts; the session screen attaches or creates tmux sessions, or connects without tmux through the `SSH Direct` row. `q` quits and `←` goes back to the previous screen.
 
 In the add and edit forms, `Enter` accepts the shown default, `<` steps back to the previous field and `q` cancels.
-
-## Port forwarding from outside
-
-SSH and ET need separate ports.
-
-```text
-public-ip:30001/TCP → remote-host:22/TCP    (SSH)
-public-ip:30002/TCP → remote-host:2022/TCP  (ET)
-```
-
-When adding or editing a host, enter `30001 user@public-ip` as the address and `30002` as the `ET external port`. Without an ET port only SSH is used, so sessions will not auto-reconnect after sleep or a network switch.
 
 ## Requirements
 
