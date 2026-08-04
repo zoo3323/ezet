@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""실제 터미널 출력(ANSI)을 docs 용 SVG 스크린샷으로 변환한다.
+"""Turn real terminal output (ANSI) into an SVG screenshot for the docs.
 
-사용법: ansi2svg.py <캡처파일> <프레임번호> <창 제목> <출력.svg>
+Usage: ansi2svg.py <capture-file> <frame-index> <window-title> <out.svg>
 
-캡처 파일은 tools/capture-screens.sh 가 expect 로 만든 원본 출력이다. 프레임은
-화면 지움(ESC[2J) 또는 커서-업 재그리기(ESC[<n>A) 를 경계로 나눈다.
-글자마다 격자 좌표(8.6px x 19px)를 직접 지정해, 보는 쪽 폰트 메트릭과 무관하게
-터미널과 같은 정렬을 유지한다(textLength 로 늘리면 글자 간격이 벌어진다).
+The capture file is raw output recorded by tools/capture-screens.sh through
+expect. Frames are split on a screen clear (ESC[2J) or a cursor-up redraw
+(ESC[<n>A). Every glyph gets an explicit grid coordinate (8.6px x 19px), so the
+alignment matches the terminal regardless of the viewer's font metrics
+(stretching with textLength would spread the glyphs apart instead).
 """
 import re
 import sys
@@ -26,7 +27,7 @@ def dwidth(ch):
 
 
 def parse(raw):
-    """ANSI 문자열 → [[(col, text, style), ...], ...] (줄 단위 스타일 런)"""
+    """ANSI text -> [[(col, text, style), ...], ...] (per-line style runs)."""
     lines, run, cur = [], [], []
     st = {"fg": None, "bold": False, "dim": False, "bg": None}
     col = 0
@@ -98,7 +99,8 @@ def parse(raw):
 
 def to_svg(lines, title):
     cols = max((sum(dwidth(c) for _, t, _ in ln for c in t) for ln in lines), default=80)
-    # 오른쪽 여백을 넉넉히 둔다: ← 처럼 글꼴 대체가 일어나는 글자는 격자보다 넓게 그려진다.
+    # Keep a generous right margin: glyphs that fall back to another font (← for
+    # one) are drawn wider than their grid cell.
     w = round(X0 * 2 + cols * CW + 24, 1)
     h = round(TITLEBAR + PAD * 2 + len(lines) * LH, 1)
     out = [
@@ -112,7 +114,7 @@ def to_svg(lines, title):
         f'<text x="{round(w / 2, 1)}" y="21.5" fill="#6b7684" font-size="11.5" '
         f'text-anchor="middle">{esc(title)}</text>',
     ]
-    # 선택 행 배경을 먼저 깔고 그 위에 글자를 얹는다.
+    # Lay the selected-row background down first, then the glyphs on top.
     for idx, ln in enumerate(lines):
         top = TITLEBAR + PAD + idx * LH
         for col, text, st in ln:
@@ -128,8 +130,8 @@ def to_svg(lines, title):
         for col, text, st in ln:
             if not text.strip():
                 continue
-            # 앞뒤 패딩 공백은 버리고, 남은 글자마다 격자 좌표를 직접 지정한다.
-            # (textLength 로 늘리면 글자 간격이 벌어져 터미널과 달라진다.)
+            # Drop the surrounding padding and place every remaining glyph on the
+            # grid (textLength would stretch the spacing away from the terminal).
             lead = len(text) - len(text.lstrip(" "))
             col += sum(dwidth(c) for c in text[:lead])
             body = text.strip(" ")
@@ -159,7 +161,8 @@ def esc(s):
 
 def main():
     raw_path, frame_idx, title, out_path = sys.argv[1:5]
-    # newline="" : 유니버설 개행 변환이 커서-업 재그리기의 \r 를 \n 으로 바꿔 프레임 경계를 지운다.
+    # newline="": universal newlines would turn the \r of a cursor-up redraw into
+    # \n and erase the frame boundary.
     raw = open(raw_path, encoding="utf-8", errors="replace", newline="").read()
     frames = re.split(r"\x1b\[2J\x1b\[H|\x1b\[\d+A\r?\x1b\[J", raw)
     frame = frames[int(frame_idx)]
@@ -167,7 +170,7 @@ def main():
 
     def blank_or_noise(ln):
         text = "".join(t for _, t, _ in ln).strip()
-        return text == "" or text in ("취소됨.", "Cancelled.")
+        return text == "" or text == "Cancelled."
 
     while lines and blank_or_noise(lines[0]):
         lines.pop(0)

@@ -1,8 +1,8 @@
-# 임시/스크래치
+# Scratch / temporary
 *.tmp
 *.log
 .DS_Store
 
-# 로컬 상태(사용자 환경별)
+# Local state (per-machine)
 *.etm-backup
 *.ezet-backup

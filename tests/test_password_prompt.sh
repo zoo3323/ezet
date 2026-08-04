@@ -27,13 +27,14 @@ for arg in "$@"; do
   esac
 done
 
-# 실제 OpenSSH 비밀번호 프롬프트처럼 리디렉션된 stderr가 아니라 제어 터미널에 쓴다.
+# Like the real OpenSSH password prompt, write to the controlling terminal
+# rather than to redirected stderr.
 printf 'Administrator@192.0.2.10 password: ' > /dev/tty
 IFS= read -rs password < /dev/tty
 printf '\n' > /dev/tty
 [ "$password" = test-password ] || exit 255
 
-# 인증 뒤 Windows cmd가 POSIX 조회 스크립트를 실행하지 못하는 상황을 재현한다.
+# Reproduce a Windows cmd that cannot run the POSIX query script after auth.
 printf '%s\n' "'valid_tmux_path' is not recognized as an internal or external command" >&2
 FAKE_SSH
 chmod +x "$tmp/fake-bin/ssh"
@@ -47,7 +48,8 @@ set timeout 5
 spawn env HOME=$env(EZET_PROMPT_HOME) PATH=$env(EZET_PROMPT_PATH) TERM=xterm-256color \
   NO_COLOR=1 EZET_NO_MULTIPLEX=1 $env(EZET_PROMPT_BIN) prompt-host
 
-# 인증 가능한 SSH 호출 중에는 스피너가 아니라 입력/대기 상태를 구분하는 고정 안내가 먼저 보여야 한다.
+# While an SSH call may still ask for a password, the fixed "type it or wait"
+# notice must come first instead of a spinner.
 expect {
   -re {SSH auth check[^\r\n]*} {}
   -re {Fetching tmux sessions[^\r\n]*} { exit 120 }
@@ -62,7 +64,7 @@ expect {
   timeout { exit 123 }
 }
 
-# 프롬프트가 열린 뒤에도 스피너가 다시 덮어쓰면 안 된다.
+# Once the prompt is open, the spinner must not paint over it again.
 set timeout 1
 expect {
   -re {Fetching tmux sessions[^\r\n]*} { exit 124 }

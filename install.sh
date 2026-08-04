@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# ezet 설치 스크립트
+# ezet installer
 #   curl -fsSL https://raw.githubusercontent.com/zoo3323/ezet/main/install.sh | bash
 #
-# 하는 일:
-#   1) bin/ezet 를 ~/.local/bin 에 내려받아 실행 권한 부여
-#   2) PATH 에 없으면 추가 방법 안내
-#   3) 선택 의존성(Eternal Terminal)이 없으면 OS에 맞는 설치 명령을 안내
-#   4) ezet --doctor 로 상태 점검
+# What it does:
+#   1) downloads bin/ezet into ~/.local/bin and makes it executable
+#   2) explains how to add that directory when it is not on PATH
+#   3) prints the OS-specific command for the optional dependency (Eternal Terminal)
+#   4) checks the result with ezet --doctor
 #
-# 환경변수:
-#   EZET_INSTALL_DIR   설치 경로(기본 ~/.local/bin)
-#   EZET_REF           내려받을 git 참조(기본 main)
+# Environment:
+#   EZET_INSTALL_DIR   install directory (default ~/.local/bin)
+#   EZET_REF           git ref to download (default main)
 set -euo pipefail
 
 REPO="zoo3323/ezet"
@@ -27,8 +27,8 @@ step() { printf '\n%s==>%s %s\n' "$c_b" "$c_r" "$*"; }
 
 os="$(uname -s 2>/dev/null || echo unknown)"
 
-# ── 1) 다운로드 ───────────────────────────────────────────────
-step "ezet 내려받는 중  ($REF → $BINDIR/ezet)"
+# ── 1) Download ──────────────────────────────────────────────
+step "Downloading ezet  ($REF -> $BINDIR/ezet)"
 mkdir -p "$BINDIR"
 tmp="$BINDIR/.ezet.download.$$"
 if command -v curl >/dev/null 2>&1; then
@@ -36,40 +36,41 @@ if command -v curl >/dev/null 2>&1; then
 elif command -v wget >/dev/null 2>&1; then
   wget -qO "$tmp" "$RAW"
 else
-  say "curl 또는 wget 이 필요합니다." >&2
+  say "curl or wget is required." >&2
   rm -f "$tmp" 2>/dev/null || true
   exit 1
 fi
-# 받은 파일이 정상 스크립트인지 최소 검증
+# Minimal sanity check that what we downloaded is the script
 if ! head -n1 "$tmp" | grep -q '^#!/usr/bin/env bash'; then
-  say "다운로드 내용이 올바르지 않습니다. 잠시 후 다시 시도해주세요." >&2
+  say "The downloaded file does not look right. Please try again in a moment." >&2
   rm -f "$tmp" 2>/dev/null || true
   exit 1
 fi
 chmod +x "$tmp"
 mv "$tmp" "$BINDIR/ezet"
-ok "설치됨: $BINDIR/ezet"
+ok "Installed: $BINDIR/ezet"
 
-# ── 2) PATH 확인 ─────────────────────────────────────────────
-step "PATH 확인"
+# ── 2) Check PATH ────────────────────────────────────────────
+step "Checking PATH"
 case ":$PATH:" in
-  *":$BINDIR:"*) ok "$BINDIR 가 이미 PATH 에 있습니다" ;;
+  *":$BINDIR:"*) ok "$BINDIR is already on PATH" ;;
   *)
-    warn "$BINDIR 가 PATH 에 없습니다. 아래 한 줄을 셸 설정에 추가하세요:"
+    warn "$BINDIR is not on PATH. Add this line to your shell config:"
     rc="$HOME/.bashrc"
     case "${SHELL:-}" in *zsh) rc="$HOME/.zshrc" ;; esac
-    # $PATH 는 사용자에게 보여줄 리터럴 명령이므로 확장하지 않는다(single quote 의도적).
+    # $PATH stays literal here: this is a command for the user to copy (the single
+    # quotes are intentional).
     # shellcheck disable=SC2016
     printf '\n    echo '\''export PATH="%s:$PATH"'\'' >> %s && source %s\n' "$BINDIR" "$rc" "$rc"
     ;;
 esac
 
-# ── 3) 선택 의존성: Eternal Terminal ──────────────────────────
-step "선택 의존성 확인 (Eternal Terminal)"
+# ── 3) Optional dependency: Eternal Terminal ─────────────────
+step "Checking the optional dependency (Eternal Terminal)"
 if command -v et >/dev/null 2>&1; then
-  ok "Eternal Terminal 설치됨 — 네트워크가 바뀌어도 자동 재연결됩니다"
+  ok "Eternal Terminal is installed - sessions reconnect across network changes"
 else
-  warn "Eternal Terminal(et)이 없습니다. 없어도 ssh 로 동작하지만, 설치하면 자동 재연결이 켜집니다:"
+  warn "Eternal Terminal (et) is missing. ezet works over ssh without it, but installing it turns on auto-reconnect:"
   case "$os" in
     Darwin)
       printf '\n    brew install eternal-terminal\n' ;;
@@ -82,18 +83,18 @@ else
       elif command -v pacman >/dev/null 2>&1; then
         printf '\n    # AUR: yay -S eternalterminal\n'
       else
-        printf '\n    # 설치 안내: https://eternalterminal.dev/\n'
+        printf '\n    # Install guide: https://eternalterminal.dev/\n'
       fi ;;
     *)
-      printf '\n    # 설치 안내: https://eternalterminal.dev/\n' ;;
+      printf '\n    # Install guide: https://eternalterminal.dev/\n' ;;
   esac
-  say "  ${c_d}참고: Eternal Terminal 자동 재연결은 원격 서버에도 etserver 가 있어야 동작합니다.${c_r}"
+  say "  ${c_d}Note: auto-reconnect also needs etserver on the remote host.${c_r}"
 fi
 
-# ── 4) 상태 점검 ─────────────────────────────────────────────
-step "설치 점검"
+# ── 4) Verify ────────────────────────────────────────────────
+step "Verifying the install"
 if "$BINDIR/ezet" --doctor; then
-  printf '\n%s설치 완료.%s  이제 %sezet%s 를 실행하세요.\n' "$c_b" "$c_r" "$c_b" "$c_r"
+  printf '\n%sDone.%s  Run %sezet%s to start.\n' "$c_b" "$c_r" "$c_b" "$c_r"
 else
-  printf '\n설치는 됐지만 점검에서 경고/오류가 있습니다. 위 --doctor 결과를 확인하세요.\n' >&2
+  printf '\nInstalled, but the check reported warnings or errors. See the --doctor output above.\n' >&2
 fi
