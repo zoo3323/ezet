@@ -15,7 +15,7 @@
 # EZET_DRYRUN=1 prints the target instead of connecting (for tests).
 set -euo pipefail
 
-EZET_VERSION="1.0.1"
+EZET_VERSION="1.0.2"
 
 # ── Dedicated SSH config module ──────────────────────────────────
 # Public interface: config_ensure, config_include_present
@@ -1322,7 +1322,9 @@ add_host() {
         AF_ERROR=''; AF_EXTERNAL="$external"
         AF_ADDR="$(af_addr_display "$user" "$addr" "$port" "$external")"
         AF_ALIAS_DEFAULT="$addr"
-        if [ "$external" -eq 1 ]; then step='et'; else step='alias'; fi ;;
+        # Going back and retyping a plain address must drop any ET port entered
+        # earlier, or it would be written to a host that has no forwarding for it.
+        if [ "$external" -eq 1 ]; then step='et'; else et_port=''; AF_ET=''; step='alias'; fi ;;
       et)
         read -r input || return 1
         af_key "$input"; case $? in 1) return 1 ;; 2) step='addr'; AF_ERROR=''; continue ;; esac

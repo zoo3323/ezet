@@ -711,6 +711,53 @@ if [ "$(sed -n '1,$p' "$form_tmp/.ssh/config.d/ezet")" != "$before" ]; then
 fi
 rm -rf "$form_tmp"
 
+# Stepping back with `<` and retyping a plain address must drop the ET port entered
+# earlier. Otherwise a plain host gets an `# ezet: et-port` line and ezet connects
+# with `et -p <port>` to a host that has no such forwarding.
+back_tmp=$(mktemp -d)
+mkdir -p "$back_tmp/.ssh/config.d"
+printf 'Include %s/.ssh/config.d/ezet\n' "$back_tmp" > "$back_tmp/.ssh/config"
+printf 'Host only\n    HostName 192.0.2.60\n    User u\n' > "$back_tmp/.ssh/config.d/ezet"
+export EZET_BACK_TEST_HOME="$back_tmp"
+expect <<'EXPECT'
+set timeout 3
+spawn env HOME=$env(EZET_BACK_TEST_HOME) NO_COLOR=1 $env(EZET_TEST_BIN)
+expect "SSH HOSTS*"
+send "\033\[B\r"
+expect -re {ADDRESS +▸}
+send "30001 ops@203.0.113.8\r"
+expect -re {ET PORT +▸}
+send "30002\r"
+expect -re {ALIAS +▸}
+send "<\r"
+expect -re {ET PORT +▸}
+send "<\r"
+expect -re {ADDRESS +▸}
+send "dev@192.0.2.10\r"
+expect -re {ALIAS +▸}
+send "plainhost\r"
+expect "SSH HOSTS*"
+send "q"
+expect eof
+EXPECT
+
+if awk '
+  tolower($1)=="host" || tolower($1)=="match" {
+    if (active) exit
+    active=(tolower($1)=="host" && $2=="plainhost")
+  }
+  active && $1=="#" && tolower($2)=="ezet:" && tolower($3)=="et-port" {found=1}
+  END {exit !found}
+' "$back_tmp/.ssh/config.d/ezet"; then
+  printf 'a plain address entered after stepping back must not keep the earlier ET port\n' >&2
+  exit 143
+fi
+back_out=$(HOME="$back_tmp" PATH="$fake_et_bin:/usr/bin:/bin" EZET_DRYRUN=1 "$EZET_BIN" plainhost probe 2>&1)
+case "$back_out" in
+  *"via et (port"*) printf 'plain host must not connect through an ET port: %s\n' "$back_out" >&2; exit 144 ;;
+esac
+rm -rf "$back_tmp"
+
 # The doctor accepts macOS/Linux (WSL reports Linux) and rejects anything else.
 # Git Bash/MSYS2 gets a distinct message: the Include line ezet writes uses an MSYS
 # path that Windows OpenSSH cannot resolve, so WSL is the supported route.
