@@ -1,85 +1,89 @@
 # ezet
 
-SSH·[Eternal Terminal](https://eternalterminal.dev/)·tmux 호스트와 세션을 고르는 대화형 CLI입니다. 순수 Bash로 동작하며, ET를 사용할 수 없으면 SSH로 자동 전환합니다.
+English · [한국어](README.ko.md)
+
+An interactive CLI for picking SSH · [Eternal Terminal](https://eternalterminal.dev/) · tmux hosts and sessions. Pure Bash, and it falls back to plain SSH whenever ET is unavailable.
 
 [![test](https://github.com/zoo3323/ezet/actions/workflows/test.yml/badge.svg)](https://github.com/zoo3323/ezet/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-## 사용 화면
+## Screens
 
-호스트와 tmux 세션을 한 화면에서 선택합니다.
+Hosts and tmux sessions are picked from the same dashboard.
 
-호스트 선택:
+Host picker:
 
-<img src="docs/img/hosts.svg" alt="호스트 선택 화면" width="780">
+<img src="docs/img/hosts.svg" alt="host picker screen" width="780">
 
-검색으로 목록 좁히기:
+Narrowing the list with search:
 
-<img src="docs/img/search.svg" alt="호스트 검색 화면" width="780">
+<img src="docs/img/search.svg" alt="host search screen" width="780">
 
-tmux 세션 선택:
+Session picker:
 
-<img src="docs/img/sessions.svg" alt="tmux 세션 선택 화면" width="780">
+<img src="docs/img/sessions.svg" alt="tmux session picker screen" width="780">
 
-새 호스트 추가:
+Adding a host:
 
-<img src="docs/img/add-host.svg" alt="새 호스트 추가 화면" width="780">
+<img src="docs/img/add-host.svg" alt="add host screen" width="780">
 
-## 핵심 기능
+## What it does
 
-- **tmux 세션 관리** — 원격 세션을 조회·생성·수정하고 바로 attach합니다.
-- **자동 재연결** — Eternal Terminal(ET)을 우선 사용해 노트북을 닫거나 네트워크가 바뀌어도 세션을 유지·재연결합니다.
-- **SSH 폴백** — ET를 설치하지 않았거나 tmux를 사용할 수 없는 호스트는 일반 SSH로 접속합니다.
+- **tmux session management** — list, create and rename remote sessions, then attach right away.
+- **Auto-reconnect** — prefers Eternal Terminal (ET), so sessions survive a closed laptop lid or a network change.
+- **SSH fallback** — hosts without ET, or without a usable tmux, are reached over plain SSH.
 
-## 설치
+## Install
 
 ```bash
 brew install zoo3323/tap/ezet
 ```
 
-또는:
+or:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/zoo3323/ezet/main/install.sh | bash
 ```
 
-ET 자동 재연결을 사용하려면 로컬에 `et`, 원격 호스트에 `etserver`를 설치하세요. 설치하지 않아도 SSH로 접속할 수 있습니다.
+For ET auto-reconnect, install `et` locally and `etserver` on the remote host. Without them ezet still connects over SSH.
 
-## 사용
+## Usage
 
 ```bash
-ezet                 # 호스트 선택
-ezet <host>          # 세션 선택
-ezet <host> <name>   # 세션 바로 연결
-ezet --doctor        # 설정 점검
+ezet                 # pick a host
+ezet <host>          # pick a session
+ezet <host> <name>   # connect to a session directly
+ezet --doctor        # check the setup
 ezet --version
 ```
 
-화면에서는 방향키로 이동하고 `Enter`로 선택합니다. 호스트 화면에서 호스트를 추가·수정·삭제하고 순서를 변경할 수 있으며, 세션 화면에서 tmux 세션을 attach·생성하거나 `SSH Direct` 행으로 tmux 없이 접속할 수 있습니다. 각 화면의 `Search` 행에서 목록을 필터링할 수 있습니다. `q`는 종료, `←`는 이전 화면입니다.
+Move with the arrow keys and pick with `Enter`. The host screen adds, edits, deletes and reorders hosts; the session screen attaches or creates tmux sessions, or connects without tmux through the `SSH Direct` row. The `Search` row on each screen filters the list. `q` quits and `←` goes back to the previous screen.
 
-## 외부망 포트포워딩
+In the add and edit forms, `Enter` accepts the shown default, `<` steps back to the previous field and `q` cancels.
 
-SSH와 ET는 서로 다른 포트가 필요합니다.
+## Port forwarding from outside
+
+SSH and ET need separate ports.
 
 ```text
-공인IP:30001/TCP → 원격호스트:22/TCP    (SSH)
-공인IP:30002/TCP → 원격호스트:2022/TCP  (ET)
+public-ip:30001/TCP → remote-host:22/TCP    (SSH)
+public-ip:30002/TCP → remote-host:2022/TCP  (ET)
 ```
 
-호스트 추가·수정 시 접속 주소에 `30001 user@공인IP`, `ET external port`에 `30002`를 입력하세요. ET 포트를 열지 않으면 SSH만 사용되며, 절전·네트워크 전환 뒤 자동 재연결은 동작하지 않습니다.
+When adding or editing a host, enter `30001 user@public-ip` as the address and `30002` as the `ET external port`. Without an ET port only SSH is used, so sessions will not auto-reconnect after sleep or a network switch.
 
-## 요구 사항
+## Requirements
 
 - Bash 3.2+
 - OpenSSH (`ssh`)
-- Eternal Terminal (`et`, 선택)
-- 원격 `tmux` (선택; 없으면 `SSH Direct` 로 접속)
+- Eternal Terminal (`et`, optional)
+- Remote `tmux` (optional; without it ezet connects through `SSH Direct`)
 
-로컬 tmux는 필요하지 않습니다.
+A local tmux is not needed.
 
-## SSH 설정
+## SSH config
 
-ezet 호스트는 `~/.ssh/config.d/ezet`에 저장됩니다. 기존 설정에는 `Include` 한 줄만 추가하며, 변경 전 백업을 만듭니다. ET 포트는 다음처럼 주석으로 저장됩니다.
+ezet hosts live in `~/.ssh/config.d/ezet`. Your existing config only gains a single `Include` line, and it is backed up before the change. ET ports are stored as a comment:
 
 ```sshconfig
 Host host-ext
@@ -89,8 +93,17 @@ Host host-ext
     # ezet: et-port 30002
 ```
 
-`ezet --uninstall`은 ezet이 추가한 `Include`만 제거합니다.
+`ezet --uninstall` removes only the `Include` line ezet added.
 
-## 라이선스
+## Development
+
+```bash
+make test    # regression tests (bash -n, shellcheck, expect)
+make docs    # regenerate the README screenshots from the real TUI
+```
+
+`make docs` drives the actual TUI with expect against a fixed fixture and converts the captured terminal output to SVG, so the screenshots cannot drift from the UI.
+
+## License
 
 [MIT](LICENSE)

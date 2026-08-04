@@ -636,6 +636,71 @@ send "q"
 expect eof
 EXPECT
 
+# 폼에서 `<` 는 앞 칸으로 되돌아가고, `q` 는 어느 칸에서든 취소해야 한다.
+# 특히 ALIAS 칸의 q 가 별칭으로 저장되면 안 된다(예전에는 취소 키가 없었다).
+form_tmp=$(mktemp -d)
+mkdir -p "$form_tmp/.ssh/config.d"
+printf 'Include %s/.ssh/config.d/ezet\n' "$form_tmp" > "$form_tmp/.ssh/config"
+printf 'Host only\n    HostName 192.0.2.60\n    User u\n' > "$form_tmp/.ssh/config.d/ezet"
+export EZET_FORM_TEST_HOME="$form_tmp"
+expect <<'EXPECT'
+set timeout 3
+spawn env HOME=$env(EZET_FORM_TEST_HOME) NO_COLOR=1 $env(EZET_TEST_BIN)
+expect "SSH HOSTS*"
+send "\033\[B\r"
+expect -re {ADDRESS +▸}
+send "30001 ops@203.0.113.9\r"
+expect {
+  -re {ET PORT +▸} { send "30002\r" }
+  timeout { exit 130 }
+}
+expect -re {ALIAS +▸}
+send "<\r"
+expect {
+  -re {ET PORT +▸} { }
+  timeout { exit 131 }
+}
+send "<\r"
+expect {
+  -re {ADDRESS +▸} { }
+  timeout { exit 132 }
+}
+send "q\r"
+expect "SSH HOSTS*"
+send "q"
+expect eof
+EXPECT
+
+if grep -q '^Host q$' "$form_tmp/.ssh/config.d/ezet"; then
+  printf 'q at the ALIAS step must cancel, not create a host named q\n' >&2
+  exit 133
+fi
+if [ "$(grep -c '^Host ' "$form_tmp/.ssh/config.d/ezet")" != 1 ]; then
+  printf 'cancelling the add form must not write a host\n' >&2
+  exit 134
+fi
+
+# 수정 폼의 ALIAS 칸에서 q 를 누르면 아무것도 바꾸지 않고 목록으로 돌아가야 한다.
+before=$(sed -n '1,$p' "$form_tmp/.ssh/config.d/ezet")
+expect <<'EXPECT'
+set timeout 3
+spawn env HOME=$env(EZET_FORM_TEST_HOME) NO_COLOR=1 $env(EZET_TEST_BIN)
+expect "SSH HOSTS*"
+send "e"
+expect -re {ADDRESS +▸}
+send "\r"
+expect -re {ALIAS +▸}
+send "q\r"
+expect "SSH HOSTS*"
+send "q"
+expect eof
+EXPECT
+if [ "$(sed -n '1,$p' "$form_tmp/.ssh/config.d/ezet")" != "$before" ]; then
+  printf 'q at the ALIAS step of the edit form must not change the config\n' >&2
+  exit 135
+fi
+rm -rf "$form_tmp"
+
 # --uninstall 은 ezet 이 넣은 Include 한 줄만 되돌리고, 사용자의 기존 설정과
 # 호스트 목록·백업은 절대 건드리지 않아야 한다.
 un_tmp=$(mktemp -d)
