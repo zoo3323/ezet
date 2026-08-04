@@ -13,7 +13,7 @@
 # 환경변수 EZET_DRYRUN=1 이면 실제 접속 대신 대상만 출력(테스트용).
 set -euo pipefail
 
-EZET_VERSION="0.1.19"
+EZET_VERSION="0.1.20"
 
 # ── 전용 SSH config 모듈 ──────────────────────────────────────────
 # 공개 인터페이스: config_ensure, config_include_present
@@ -1132,13 +1132,30 @@ host_alias_exists() {
 }
 
 # ── 목록 화면 상태줄 ─────────────────────────────────────────────
-# 추가·수정·삭제 결과는 곧바로 화면이 지워져 사실상 보이지 않았다. 결과를 담아
-# 두고 호스트 목록 아래에 한 줄로 보여준다(다음 작업 때까지 유지).
+# 추가·수정·삭제·이름변경 결과는 곧바로 화면이 지워져 사실상 보이지 않았다.
+# 결과를 담아 두고 목록 아래에 한 줄로 보여준다(다음 작업 때까지 유지).
 HOST_STATUS=''; HOST_STATUS_KIND='ok'; HOST_STATUS_NOTE=''
 host_status() {                   # $1=ok|err  $2=결과  $3=보조 안내(선택)
   HOST_STATUS_KIND="$1"; HOST_STATUS="$2"; HOST_STATUS_NOTE="${3:-}"
 }
 host_status_clear() { HOST_STATUS=''; HOST_STATUS_NOTE=''; HOST_STATUS_KIND='ok'; }
+SESSION_STATUS=''; SESSION_STATUS_KIND='ok'
+session_status() { SESSION_STATUS_KIND="$1"; SESSION_STATUS="$2"; }
+session_status_clear() { SESSION_STATUS=''; SESSION_STATUS_KIND='ok'; }
+# 두 화면이 같은 모양으로 상태줄을 그린다. 상태줄은 그대로 출력하고, 그린 줄
+# 수는 전역 STATUS_ROWS 로 넘긴다(명령 치환으로 받으면 본문까지 삼켜진다).
+STATUS_ROWS=0
+draw_status_line() {              # $1=kind $2=본문 $3=보조 안내
+  local kind="$1" text="$2" note="$3"
+  STATUS_ROWS=0
+  [ -z "$text" ] && return 0
+  if [ "$kind" = err ]; then printf '  %s✗ %s%s\n' "$RED" "$text" "$RESET"
+  else printf '  %s✓%s %s\n' "$GR" "$RESET" "$text"
+  fi
+  STATUS_ROWS=1
+  if [ -n "$note" ]; then printf '    %s%s%s\n' "$DIM" "$note" "$RESET"; STATUS_ROWS=2; fi
+  return 0
+}
 
 # ── 호스트 추가·수정 폼 ──────────────────────────────────────────
 # 목록 아래에 프롬프트를 쌓지 않고, 단계마다 같은 자리에 한 화면을 다시 그린다.
@@ -1582,6 +1599,27 @@ edit_host() {
   return 1
 }
 
+# 삭제 확인 화면. 무엇이 지워지는지와 건드리지 않는 것을 함께 보여준다.
+draw_delete_form() {              # $1=별칭 $2=주소
+  local width
+  width=$(dash_inner_width); set_box_width "$width"
+  is_tty && clear_screen
+  {
+    app_header 'DELETE HOST'
+    box_top
+    box_line_wide 'DELETE HOST' "${RED}${B}DELETE HOST${RESET}"
+    box_mid
+    af_row none x 'HOST'    "$1"        '-'
+    af_row none x 'ADDRESS' "${2:-?}"   '-'
+    box_mid
+    af_note 'Removes this Host block from the ezet SSH config.'
+    af_note 'Your main ~/.ssh/config is not touched.'
+    box_bot
+    echo
+    printf '  %sReally delete?%s [y/N] %s▸%s ' "$B" "$RESET" "$YE" "$RESET"
+  } >&2
+}
+
 # 선택한 Host 별칭을 ezet 전용 config에서 원자적으로 삭제한다.
 # 공유 블록(예: Host dev gpu)에서는 선택한 별칭만 제거하고 나머지 설정을 보존한다.
 delete_host() {
@@ -1589,13 +1627,11 @@ delete_host() {
   local answer address note=''
   host_status_clear
   address=$(resolve_address "$alias" 2>/dev/null || true)
-  printf '\n  %sDelete host%s\n' "$B" "$RESET" >&2
-  printf '   %s%s%s%s\n' "$CY" "$alias" "$RESET" "${address:+  →  $address}" >&2
-  printf '   Really delete? [y/N]: ' >&2
+  draw_delete_form "$alias" "$address"
   read -r answer || return 1
-  case "$answer" in y|Y|yes|YES) ;; *) echo "  Cancelled." >&2; return 1 ;; esac
+  case "$answer" in y|Y|yes|YES) ;; *) return 1 ;; esac
 
-  [ -f "$cfg" ] || { echo "  Delete failed: the ezet config file does not exist." >&2; return 1; }
+  [ -f "$cfg" ] || { host_status err 'Delete failed: the ezet config file does not exist.'; return 1; }
   if awk -v alias="$alias" '
     {
       key=tolower($1)
@@ -1692,16 +1728,7 @@ draw_hosts() {
       printf '  %se%s edit · %sd%s delete · %so%s reorder · %sq%s quit\n' \
         "$B" "$RESET" "$B" "$RESET" "$B" "$RESET" "$B" "$RESET"
     fi
-    if [ -n "$HOST_STATUS" ]; then
-      if [ "$HOST_STATUS_KIND" = err ]; then printf '  %s✗ %s%s\n' "$RED" "$HOST_STATUS" "$RESET"
-      else printf '  %s✓%s %s\n' "$GR" "$RESET" "$HOST_STATUS"
-      fi
-      status_rows=1
-      if [ -n "$HOST_STATUS_NOTE" ]; then
-        printf '    %s%s%s\n' "$DIM" "$HOST_STATUS_NOTE" "$RESET"
-        status_rows=2
-      fi
-    fi
+    draw_status_line "$HOST_STATUS_KIND" "$HOST_STATUS" "$HOST_STATUS_NOTE"; status_rows=$STATUS_ROWS
   } >&2
   DREW_LINES=$((7 + rows + search_rows + status_rows))
 }
@@ -2132,10 +2159,39 @@ build_session_rows() {
   fi
 }
 
+# 세션 이름 입력 폼(새 세션 · 이름 변경). 한 칸만 받으므로 단계 표시는 없다.
+draw_session_form() {             # $1=new|rename  $2=현재 이름(rename)
+  local mode="$1" old="${2:-}" width title trend label hint
+  width=$(dash_inner_width); set_box_width "$width"
+  if [ "$mode" = rename ]; then
+    title="RENAME SESSION  $old"; trend="${B}RENAME SESSION${RESET}  ${CY}${B}${old}${RESET}"
+    label='NEW NAME'; hint="new name for $old"
+  else
+    title="NEW SESSION  $host"; trend="${B}NEW SESSION${RESET}  ${CY}${B}${host}${RESET}"
+    label='NAME'; hint='tmux session to create'
+  fi
+  is_tty && clear_screen
+  {
+    app_header "$([ "$mode" = rename ] && echo 'RENAME SESSION' || echo 'NEW SESSION')"
+    box_top
+    box_line_wide "$title" "$trend"
+    box_mid
+    [ "$mode" = rename ] && af_row none x 'CURRENT' "$old" '-'
+    af_row name name "$label" '' "$hint"
+    box_mid
+    af_note 'Letters, digits and . _ - only'
+    af_note 'Enter = cancel'
+    box_bot
+    echo
+    [ -n "$AF_ERROR" ] && printf '  %s✗ %s%s\n\n' "$RED" "$AF_ERROR" "$RESET"
+    printf '  %s%-7s%s %s▸%s ' "$B" "$label" "$RESET" "$YE" "$RESET"
+  } >&2
+}
+
 # 세션 대시보드 그리기.
 TMUX_AVAILABLE=0
 draw_sessions() {
-  local value_w=$((INNER_W - 7)) info pos orig rows=0 hint_rows=0 search_rows=0 action_started=0
+  local value_w=$((INNER_W - 7)) info pos orig rows=0 hint_rows=0 search_rows=0 status_rows=0 action_started=0
   [ "$value_w" -lt 8 ] && value_w=8
   {
     app_header 'TMUX SESSIONS'
@@ -2199,8 +2255,9 @@ draw_sessions() {
       printf '  %se%s edit · %sq%s quit\n' \
         "$B" "$RESET" "$B" "$RESET"
     fi
+    draw_status_line "$SESSION_STATUS_KIND" "$SESSION_STATUS" ''; status_rows=$STATUS_ROWS
   } >&2
-  DREW_LINES=$(( 8 + rows + 3 + hint_rows + search_rows ))
+  DREW_LINES=$(( 8 + rows + 3 + hint_rows + search_rows + status_rows ))
 }
 
 refresh_sessions() {
@@ -2287,39 +2344,41 @@ if is_tty; then
         elif [ "$action" != ssh ]; then target="${names[$A_IDX]}"
         fi ;;
       new)
+        session_status_clear; AF_ERROR=''
         while true; do
-          printf '  New session name (Enter=cancel): ' >&2
+          draw_session_form new
           read -r target || target=""
           [ -z "$target" ] && break
           if valid_name "$target"; then break; fi
-          echo "  Invalid name (letters/digits/._- only)." >&2
+          AF_ERROR='Invalid name (letters/digits/._- only).'
         done
         if [ -z "$target" ]; then ARROW_START=$A_IDX; clear_screen; continue; fi ;;
       edit)
         ARROW_START=$A_IDX
+        session_status_clear; AF_ERROR=''
         old="${names[$A_IDX]}"
         if ! valid_name "$old"; then
-          echo "  This session name cannot be safely renamed in ezet: $old" >&2
+          session_status err "This session name cannot be safely renamed in ezet: $old"
           continue
         fi
-        printf "  New name for '%s' (Enter=cancel): " "$old" >&2
+        draw_session_form rename "$old"
         read -r nn || { echo >&2; continue; }
         if [ -z "$nn" ]; then clear_screen; continue; fi
         if valid_name "$nn"; then
           rename_ok=0
           tmux_bin="${REMOTE_TMUX:-}"
           if ! valid_remote_tmux_path "$tmux_bin"; then
-            echo "  Rename failed (remote tmux path unverified)." >&2
+            session_status err 'Rename failed (remote tmux path unverified).'
           elif ssh -n "${SSH_CONNECT_OPTIONS[@]}" "$host" "'$tmux_bin' rename-session -t '$old' '$nn'" 2>/dev/null; then
-            echo "  Renamed: $old -> $nn" >&2
+            session_status ok "Renamed: $old -> $nn"
             rename_ok=1
           else
-            echo "  Rename failed (duplicate name?)." >&2
+            session_status err 'Rename failed (duplicate name?).'
           fi
           if [ "$rename_ok" -eq 1 ]; then refresh_sessions 'the session list'; fi
           clear_screen
         else
-          echo "  Invalid name (letters/digits/._- only)." >&2
+          session_status err 'Invalid name (letters/digits/._- only).'
         fi
         continue ;;
     esac

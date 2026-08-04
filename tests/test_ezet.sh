@@ -394,7 +394,8 @@ expect "Fetched tmux sessions*"
 expect "no active tmux sessions*"
 expect "q quit*"
 send "\r"
-expect "New session name*"
+expect "NEW SESSION*"
+expect -re {NAME +▸}
 send "\r"
 expect "no active tmux sessions*"
 send "q"
@@ -465,7 +466,12 @@ expect -re {› Search  bravo}
 send "\033\[B"
 expect -re {› bravo}
 send "e"
-expect "New name for 'bravo'*"
+expect "RENAME SESSION  bravo*"
+expect {
+  -re {CURRENT +bravo} { }
+  timeout { exit 25 }
+}
+expect -re {NEW NAME +▸}
 send "charlie\r"
 expect "Renamed: bravo -> charlie*"
 expect "Fetched the session list*"
