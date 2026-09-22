@@ -15,7 +15,7 @@
 # EZET_DRYRUN=1 prints the target instead of connecting (for tests).
 set -euo pipefail
 
-EZET_VERSION="1.0.4"
+EZET_VERSION="1.0.5"
 
 # ── Dedicated SSH config module ──────────────────────────────────
 # Public interface: config_ensure, config_include_present
@@ -129,20 +129,65 @@ else
 fi
 
 # ── ET client options ────────────────────────────────────────────
-# Closing a terminal window kills the et client with SIGHUP, and a stock et leaves
-# the server-side session alive as "disconnected": etserver then keeps that
-# session's recovery buffer (up to 64MiB of output per connection) until someone
-# ends the session. Over weeks those orphans are what balloons etserver memory.
-# Newer et (master after 2026-09-21) has --close-on-hangup, which ends the session
-# on the server too. Pass it when this et understands it; older clients keep
-# working unchanged. Probed once per run - `et --help` is cheap but not free.
-ET_OPTIONS=(); ET_OPTIONS_PROBED=0
-et_client_options() {
-  [ "$ET_OPTIONS_PROBED" -eq 1 ] && return 0
-  ET_OPTIONS_PROBED=1
-  if et --help 2>&1 | grep -q -- '--close-on-hangup'; then
-    ET_OPTIONS=(--close-on-hangup)
+# Closing a terminal window sends SIGHUP to the et client. `--close-on-hangup`
+# closes the connected session on a best-effort basis (via ET change PR #837), but
+# requires a matching remote etserver and etterminal; a legacy server may fail on
+# the close packet. It is off by default, opt-in per selected Host block, and the
+# local client capability is cached while options are reset for every host.
+ET_OPTIONS=(); ET_CLIENT_SUPPORT_PROBED=0; ET_CLIENT_SUPPORT=0
+load_host_close_on_hangup() {
+  local target="$1" cfg="$EZET_HOSTS_FILE"
+  [ -f "$cfg" ] || return 1
+  awk -v target="$target" '
+    function literal(s) {
+      return index(s,"*")==0 && index(s,"?")==0 && index(s,"!")==0 &&
+             index(s,"[")==0 && index(s,"]")==0
+    }
+    function target_host(    i,t) {
+      for (i=2; i<=NF; i++) {
+        t=$i; if (t=="#") break
+        if (!literal(t)) return 0
+        if (tolower(t)==tolower(target)) matched=1
+      }
+      return matched
+    }
+    {
+      key=tolower($1)
+      if (key=="host" || key=="match") {
+        if (in_target) exit
+        in_target=0; matched=0
+        if (!found && key=="host" && target_host()) { in_target=1; found=1 }
+        next
+      }
+      if (!in_target) next
+      if ($1=="#" && $2=="ezet:" && $3=="close-on-hangup") {
+        marker++
+        if (NF==4 && $4=="yes") valid++
+      }
+    }
+    END { exit (found && marker==1 && valid==1) ? 0 : 1 }
+  ' "$cfg"
+}
+
+probe_et_client_support() {
+  local help
+  if [ "$ET_CLIENT_SUPPORT_PROBED" -eq 1 ]; then
+    [ "$ET_CLIENT_SUPPORT" -eq 1 ]
+    return $?
   fi
+  ET_CLIENT_SUPPORT_PROBED=1; ET_CLIENT_SUPPORT=0
+  if command -v et >/dev/null 2>&1 && help=$(et --help 2>&1); then
+    case "$help" in *--close-on-hangup*) ET_CLIENT_SUPPORT=1 ;; esac
+  fi
+  [ "$ET_CLIENT_SUPPORT" -eq 1 ]
+}
+
+et_client_options() {
+  local target="${1:-$host}"
+  ET_OPTIONS=()
+  load_host_close_on_hangup "$target" || return 0
+  if probe_et_client_support; then ET_OPTIONS=(--close-on-hangup); fi
+  return 0
 }
 
 doctor_file_mode() {
@@ -182,10 +227,8 @@ run_doctor() {
   if command -v et >/dev/null 2>&1; then
     version=$(et --version 2>&1 | sed -n '1p')
     doctor_ok "Eternal Terminal: ${version:-installed}"
-    et_client_options
-    if [ "${#ET_OPTIONS[@]}" -gt 0 ]; then doctor_ok "et supports --close-on-hangup: a closed window ends its server session"
-    else doctor_warn "et lacks --close-on-hangup: a closed window leaves its session (and its memory) on the server"
-    fi
+    if probe_et_client_support; then doctor_ok "et client supports --close-on-hangup"; else doctor_warn "et client lacks --close-on-hangup (or help probe failed)"; fi
+    doctor_ok "close-on-hangup: explicit per-host opt-in; server teardown is not automatically verified"
   else
     doctor_warn "Eternal Terminal not installed: SSH fallback only"
   fi
@@ -343,7 +386,7 @@ connect_session() {
   TERMINAL_SANITIZE_NEEDED=1
   if [ "$transport" = et ]; then
     show_connect_status 'ET + TMUX' "$host ← $session" 'auto-reconnect · Ctrl-C to cancel'
-    et_client_options
+    et_client_options "$host"
     if [ -n "$et_port" ]; then
       et ${ET_OPTIONS[@]+"${ET_OPTIONS[@]}"} -p "$et_port" "$host" -c "$tmux_command"
     else
@@ -1495,11 +1538,11 @@ load_host_details() {
 # other option. In a shared block such as `Host old sibling`, only old is split into
 # its own block so sibling is unaffected.
 update_host() {
-  local old="$1" new="$2" addr="$3" user="$4" port="$5" write_port="$6" et_port="$7"
+  local old="$1" new="$2" addr="$3" user="$4" port="$5" write_port="$6" et_port="$7" close_on_hangup="${8:-0}"
   local cfg="$EZET_HOSTS_FILE" tmp="${EZET_HOSTS_FILE%/*}/.ezet.tmp.$$"
   [ -f "$cfg" ] || return 1
   if awk -v old="$old" -v new="$new" -v addr="$addr" -v user="$user" -v port="$port" \
-    -v write_port="$write_port" -v et_port="$et_port" '
+    -v write_port="$write_port" -v et_port="$et_port" -v close_on_hangup="$close_on_hangup" '
     function is_et_port_marker() {
       return ($1=="#" && tolower($2)=="ezet:" && tolower($3)=="et-port")
     }
@@ -1509,6 +1552,7 @@ update_host() {
       if (user!="" && !seen_user) print "    User " user
       if (write_port && !seen_port) print "    Port " port
       if (et_port!="" && !seen_et_port) print "    # ezet: et-port " et_port
+      if (close_on_hangup && !seen_close) print "    # ezet: close-on-hangup yes"
     }
     function finish_shared( i) {
       if (!shared) return
@@ -1528,7 +1572,7 @@ update_host() {
       key=tolower($1)
       if (key=="host" || key=="match") {
         if (shared) finish_shared(); else finish_target()
-        target=0; seen_hostname=0; seen_user=0; seen_port=0; seen_et_port=0
+        target=0; seen_hostname=0; seen_user=0; seen_port=0; seen_et_port=0; seen_close=0
         matched=0; pattern_count=0
         if (key=="host" && !found) {
           for (i=2; i<=NF; i++) {
@@ -1569,6 +1613,11 @@ update_host() {
           seen_et_port=1
           next
         }
+        if ($1=="#" && tolower($2)=="ezet:" && tolower($3)=="close-on-hangup") {
+          if (close_on_hangup && !seen_close) print "    # ezet: close-on-hangup yes"
+          seen_close=1
+          next
+        }
         if (key=="hostname") {
           if (!seen_hostname) print "    HostName " addr
           seen_hostname=1
@@ -1607,6 +1656,11 @@ update_host() {
         seen_et_port=1
         next
       }
+      if (target && $1=="#" && tolower($2)=="ezet:" && tolower($3)=="close-on-hangup") {
+        if (close_on_hangup && !seen_close) print "    # ezet: close-on-hangup yes"
+        seen_close=1
+        next
+      }
       print
     }
     END {
@@ -1625,7 +1679,7 @@ update_host() {
 # Edit a host address, user and alias.
 edit_host() {
   local old="$1" input addr user port external et_port alias current target shown note='' step
-  local original_addr original_user original_port original_external original_et_port shared=0
+  local original_addr original_user original_port original_external original_et_port original_close=0 close_keep=0 shared=0
   host_status_clear
   if ! load_host_details "$old"; then
     host_status err "Edit failed: '$old' was not found in the ezet config."
@@ -1636,6 +1690,7 @@ edit_host() {
   port="$HOST_DETAIL_PORT"; external="$HOST_DETAIL_HAS_PORT"; et_port="$HOST_DETAIL_ET_PORT"
   original_addr="$addr"; original_user="$user"; original_port="$port"
   original_external="$external"; original_et_port="$et_port"
+  if load_host_close_on_hangup "$old"; then original_close=1; fi
   target="${user:+$user@}$addr"
   if [ "$external" -eq 1 ]; then current="$port $target"; else current="$target"; fi
 
@@ -1700,7 +1755,10 @@ edit_host() {
     host_status ok 'No change.'
     return 0
   fi
-  if update_host "$old" "$alias" "$addr" "$user" "$port" "$external" "$et_port"; then
+  if [ "$addr" = "$original_addr" ] && [ "$user" = "$original_user" ] \
+    && [ "$port" = "$original_port" ] && [ "$external" = "$original_external" ] \
+    && [ "$et_port" = "$original_et_port" ]; then close_keep="$original_close"; fi
+  if update_host "$old" "$alias" "$addr" "$user" "$port" "$external" "$et_port" "$close_keep"; then
     if [ "$alias" != "$old" ] && ! update_host_order_alias "$old" "$alias"; then
       note='Note: the address was changed, but the saved host order was not updated.'
     fi

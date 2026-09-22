@@ -6,7 +6,7 @@ An interactive CLI for picking SSH · [Eternal Terminal](https://eternalterminal
 
 - **tmux session management** — list, create and rename remote sessions, then attach right away.
 - **Auto-reconnect** — prefers Eternal Terminal (ET), so sessions survive a closed laptop lid or a network change.
-- **Clean session close** — with an ET client that supports `--close-on-hangup` (master after 2026-09-21), closing the window also ends the session on the server, so `etserver` does not keep orphaned sessions and their recovery buffers around. Older clients work unchanged; `ezet --doctor` tells you which one you have.
+- **Opt-in session close** — ezet passes `--close-on-hangup` only for an explicitly enabled Host and a client that supports it. The request may not reach the server depending on the connection state, and requires matching ET components.
 - **SSH fallback** — hosts without ET, or without a usable tmux, are reached over plain SSH.
 
 [![test](https://github.com/zoo3323/ezet/actions/workflows/test.yml/badge.svg)](https://github.com/zoo3323/ezet/actions/workflows/test.yml)
@@ -95,6 +95,20 @@ Host host-ext
     Port 30001
     # ezet: et-port 30002
 ```
+
+After verifying both remote ET components use [PR #837](https://github.com/MisterTea/EternalTerminal/pull/837), opt an ezet-owned `Host` block with no wildcards in by adding this marker:
+
+```sshconfig
+# ezet: close-on-hangup yes
+```
+
+The marker is recognized in this form inside an ezet-owned `Host` block; it is ignored in wildcard or `Match` blocks and as a global setting. `ezet --doctor` reports local client support separately, but it cannot verify per-host activation or remote server state. A version string such as `7.0.0` alone does not confirm support.
+
+`--close-on-hangup` closes a connected session on a best-effort basis through [PR #837](https://github.com/MisterTea/EternalTerminal/pull/837). The remote `etserver` and `etterminal` must both include the matching change; ezet cannot verify that, and a legacy server may treat the close packet as fatal. The option cannot help after a network loss, power failure, or forced kill, so keep the remote shell in tmux when you need recovery.
+
+Editing ET connection settings in ezet clears the opt-in marker; alias-only renames preserve it. Recheck it after server changes, and restart ezet after upgrading this version.
+
+An optional custom ET recovery-buffer patch outside ezet can lower the bound to 8 MiB; the earlier upstream proposal was withdrawn. It is a memory/recovery tradeoff, not a stale-session fix or a guarantee of a fixed memory ceiling; backpressure may pause reads, and tmux does not preserve unlimited ET scrollback. See [PR #846 discussion](https://github.com/MisterTea/EternalTerminal/pull/846#issuecomment-5753440337).
 
 `ezet --uninstall` removes only the `Include` line ezet added.
 
