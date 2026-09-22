@@ -15,7 +15,7 @@
 # EZET_DRYRUN=1 prints the target instead of connecting (for tests).
 set -euo pipefail
 
-EZET_VERSION="1.0.2"
+EZET_VERSION="1.0.3"
 
 # ── Dedicated SSH config module ──────────────────────────────────
 # Public interface: config_ensure, config_include_present
@@ -318,6 +318,7 @@ connect_session() {
   tmux_bin="${REMOTE_TMUX:-tmux}"
   if [ "$tmux_bin" != tmux ] && ! valid_remote_tmux_path "$tmux_bin"; then tmux_bin=tmux; fi
   tmux_command="'$tmux_bin' new-session -A -s '$session'"
+  TERMINAL_SANITIZE_NEEDED=1
   if [ "$transport" = et ]; then
     show_connect_status 'ET + TMUX' "$host ← $session" 'auto-reconnect · Ctrl-C to cancel'
     if [ -n "$et_port" ]; then
@@ -346,6 +347,7 @@ connect_plain_ssh() {
     return 0
   fi
   show_connect_status 'SSH SHELL' "$host" "up to ${EZET_SSH_CONNECT_TIMEOUT}s · Ctrl-C to cancel"
+  TERMINAL_SANITIZE_NEEDED=1
   ssh "${SSH_CONNECT_OPTIONS[@]}" -t "$host"
 }
 
@@ -734,6 +736,30 @@ show_cursor() {
   if [ -t 2 ] && [ "$CURSOR_HIDDEN" -eq 1 ]; then
     printf '\e[?25h' >&2
     CURSOR_HIDDEN=0
+  fi
+}
+
+# ── Terminal sanitize after a connection ─────────────────────────
+# When et/ssh dies mid-session (network drop, remote kill), the remote tmux has
+# no chance to undo the modes it enabled on the local terminal: mouse reporting,
+# focus events, bracketed paste, application cursor keys, raw tty. Left on,
+# every mouse move floods the dashboard with escape sequences and garbles the
+# screen. Reset those modes and drain the already-queued input before reading
+# keys again. Only runs after a real connection attempt (flag below), so tests
+# and dry runs never touch the tty.
+TERMINAL_SANITIZE_NEEDED=0
+sanitize_terminal() {
+  [ "$TERMINAL_SANITIZE_NEEDED" -eq 1 ] || return 0
+  TERMINAL_SANITIZE_NEEDED=0
+  [ -t 2 ] || return 0
+  # mouse variants (1000/1002/1003 + encodings 1005/1006/1015) · focus (1004)
+  # · bracketed paste (2004) · application cursor keys (DECCKM)
+  printf '\e[?1000l\e[?1002l\e[?1003l\e[?1005l\e[?1006l\e[?1015l\e[?1004l\e[?2004l\e[?1l' >&2
+  stty sane </dev/tty 2>/dev/null || true
+  # Fractional read timeouts need bash >= 4 (macOS /bin/bash 3.2 lacks them);
+  # there the queued bytes leak once, but the mode resets above stop the flood.
+  if is_tty && [ "${BASH_VERSINFO[0]:-0}" -ge 4 ]; then
+    while IFS= read -rsn1 -t 0.05 _; do :; done
   fi
 }
 
@@ -2357,7 +2383,7 @@ refresh_sessions() {
 }
 
 # ── Main ─────────────────────────────────────────────────────────
-trap 'stop_activity_silent; dashboard_stop; show_cursor' EXIT
+trap 'stop_activity_silent; dashboard_stop; sanitize_terminal; show_cursor' EXIT
 trap 'exit 130' INT
 trap 'exit 129' HUP
 trap 'exit 143' TERM
@@ -2461,6 +2487,7 @@ if is_tty; then
     if [ "$action" = ssh ]; then
       dashboard_suspend
       connect_plain_ssh || connect_status=$?
+      sanitize_terminal
       if [ "$connect_status" -eq 255 ]; then
         dashboard_resume
         clear_screen
@@ -2473,6 +2500,7 @@ if is_tty; then
 
     dashboard_suspend
     connect_session "$target" || connect_status=$?
+    sanitize_terminal
     dashboard_resume
     clear_screen
     ARROW_START=$keep_idx
