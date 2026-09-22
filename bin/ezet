@@ -1200,6 +1200,14 @@ host_status() {                   # $1=ok|err  $2=result  $3=extra note (optiona
   HOST_STATUS_KIND="$1"; HOST_STATUS="$2"; HOST_STATUS_NOTE="${3:-}"
 }
 host_status_clear() { HOST_STATUS=''; HOST_STATUS_NOTE=''; HOST_STATUS_KIND='ok'; }
+# Hosts read from the main SSH config are listed (and connectable) but ezet never
+# rewrites that file, so `e` and `d` refuse them - the `ro` tag in the list says so.
+# The refusal used to go to stderr, which clear_screen wiped on the same breath:
+# the key looked dead. Say it on the status line instead, and say how to fix it.
+read_only_status() {              # $1=alias  $2=edit|delete
+  host_status err "Cannot $2 '$1': it lives in your main SSH config." \
+    "ezet only writes ${EZET_HOSTS_FILE/#$HOME/\~} - move the Host block there to manage it here."
+}
 SESSION_STATUS=''; SESSION_STATUS_KIND='ok'
 session_status() { SESSION_STATUS_KIND="$1"; SESSION_STATUS="$2"; }
 session_status_clear() { SESSION_STATUS=''; SESSION_STATUS_KIND='ok'; }
@@ -1925,7 +1933,7 @@ pick_host() {
           hosts[A_IDX - 1]="${hosts[$A_IDX]}"
           hosts[A_IDX]="$swap"
           if save_host_order "${hosts[@]}"; then ARROW_START=$((A_IDX - 1))
-          else echo "  Could not save the host order: $EZET_HOST_ORDER_FILE" >&2; fi
+          else host_status err "Could not save the host order." "Tried to write: $EZET_HOST_ORDER_FILE"; fi
         fi
         clear_screen
         continue ;;
@@ -1936,7 +1944,7 @@ pick_host() {
           hosts[A_IDX + 1]="${hosts[$A_IDX]}"
           hosts[A_IDX]="$swap"
           if save_host_order "${hosts[@]}"; then ARROW_START=$((A_IDX + 1))
-          else echo "  Could not save the host order: $EZET_HOST_ORDER_FILE" >&2; fi
+          else host_status err "Could not save the host order." "Tried to write: $EZET_HOST_ORDER_FILE"; fi
         fi
         clear_screen
         continue ;;
@@ -1944,7 +1952,7 @@ pick_host() {
         ARROW_START=$A_IDX
         old="${hosts[$A_IDX]}"
         if host_in_file "$old" "$EZET_HOSTS_FILE"; then edit_host "$old" || true
-        else echo "  Hosts from the main SSH config cannot be edited in ezet: $old" >&2; fi
+        else read_only_status "$old" edit; fi
         clear_screen
         continue ;;
       delete)
@@ -1953,7 +1961,7 @@ pick_host() {
         if host_in_file "$old" "$EZET_HOSTS_FILE"; then
           if delete_host "$old" && [ "$n" -eq 1 ]; then return 1; fi
         else
-          echo "  Hosts from the main SSH config cannot be deleted in ezet: $old" >&2
+          read_only_status "$old" delete
         fi
         clear_screen
         continue ;;
