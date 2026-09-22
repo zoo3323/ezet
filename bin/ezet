@@ -15,7 +15,7 @@
 # EZET_DRYRUN=1 prints the target instead of connecting (for tests).
 set -euo pipefail
 
-EZET_VERSION="1.0.3"
+EZET_VERSION="1.0.4"
 
 # ── Dedicated SSH config module ──────────────────────────────────
 # Public interface: config_ensure, config_include_present
@@ -128,6 +128,23 @@ else
   RESET='' B='' DIM='' SEL='' RCF='' CY='' GR='' YE='' RED='' BD='' HINT=''
 fi
 
+# ── ET client options ────────────────────────────────────────────
+# Closing a terminal window kills the et client with SIGHUP, and a stock et leaves
+# the server-side session alive as "disconnected": etserver then keeps that
+# session's recovery buffer (up to 64MiB of output per connection) until someone
+# ends the session. Over weeks those orphans are what balloons etserver memory.
+# Newer et (master after 2026-09-21) has --close-on-hangup, which ends the session
+# on the server too. Pass it when this et understands it; older clients keep
+# working unchanged. Probed once per run - `et --help` is cheap but not free.
+ET_OPTIONS=(); ET_OPTIONS_PROBED=0
+et_client_options() {
+  [ "$ET_OPTIONS_PROBED" -eq 1 ] && return 0
+  ET_OPTIONS_PROBED=1
+  if et --help 2>&1 | grep -q -- '--close-on-hangup'; then
+    ET_OPTIONS=(--close-on-hangup)
+  fi
+}
+
 doctor_file_mode() {
   stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1" 2>/dev/null || printf '?'
 }
@@ -165,6 +182,10 @@ run_doctor() {
   if command -v et >/dev/null 2>&1; then
     version=$(et --version 2>&1 | sed -n '1p')
     doctor_ok "Eternal Terminal: ${version:-installed}"
+    et_client_options
+    if [ "${#ET_OPTIONS[@]}" -gt 0 ]; then doctor_ok "et supports --close-on-hangup: a closed window ends its server session"
+    else doctor_warn "et lacks --close-on-hangup: a closed window leaves its session (and its memory) on the server"
+    fi
   else
     doctor_warn "Eternal Terminal not installed: SSH fallback only"
   fi
@@ -297,6 +318,7 @@ if [ "$#" -gt 0 ]; then
 fi
 
 # ── Connecting ───────────────────────────────────────────────────
+
 # Connect to a session (attach if it exists, otherwise create it). et first, ssh
 # as the fallback. Deliberately not exec: the caller refreshes the list afterwards.
 connect_session() {
@@ -321,10 +343,11 @@ connect_session() {
   TERMINAL_SANITIZE_NEEDED=1
   if [ "$transport" = et ]; then
     show_connect_status 'ET + TMUX' "$host ← $session" 'auto-reconnect · Ctrl-C to cancel'
+    et_client_options
     if [ -n "$et_port" ]; then
-      et -p "$et_port" "$host" -c "$tmux_command"
+      et ${ET_OPTIONS[@]+"${ET_OPTIONS[@]}"} -p "$et_port" "$host" -c "$tmux_command"
     else
-      et "$host" -c "$tmux_command"
+      et ${ET_OPTIONS[@]+"${ET_OPTIONS[@]}"} "$host" -c "$tmux_command"
     fi
   else
     if command -v et >/dev/null 2>&1; then

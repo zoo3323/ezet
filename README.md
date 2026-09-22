@@ -6,6 +6,7 @@ An interactive CLI for picking SSH · [Eternal Terminal](https://eternalterminal
 
 - **tmux session management** — list, create and rename remote sessions, then attach right away.
 - **Auto-reconnect** — prefers Eternal Terminal (ET), so sessions survive a closed laptop lid or a network change.
+- **Clean session close** — with an ET client that supports `--close-on-hangup` (master after 2026-09-21), closing the window also ends the session on the server, so `etserver` does not keep orphaned sessions and their recovery buffers around. Older clients work unchanged; `ezet --doctor` tells you which one you have.
 - **SSH fallback** — hosts without ET, or without a usable tmux, are reached over plain SSH.
 
 [![test](https://github.com/zoo3323/ezet/actions/workflows/test.yml/badge.svg)](https://github.com/zoo3323/ezet/actions/workflows/test.yml)
