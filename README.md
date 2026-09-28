@@ -69,6 +69,8 @@ In the add and edit forms, `Enter` accepts the shown default, `<` steps back to 
 
 A local tmux is not needed.
 
+ezet compares runnable tmux versions in PATH, user installs, Homebrew and other common locations, and selects the newest installed version. It uses a server socket named `ezet-<version>` consistently for listing, attaching and renaming sessions, including `ezet host session` quick connects. After upgrading remote tmux, reconnect to ezet to use the new version. Existing default-server or older-version sessions are left running; they are not migrated or shown in the new server. Access those with their original tmux/socket command. This does not install or upgrade tmux itself. For terminal foreground/background color detection, use tmux 3.4 or later; no fixed color palette is required.
+
 ## Platforms
 
 ezet runs on **macOS and Linux** (WSL included, since it reports itself as Linux).

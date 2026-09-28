@@ -17,3 +17,5 @@ fi
 "$ROOT/tests/test_ezet.sh"
 bash "$ROOT/tests/test_password_prompt.sh"
 bash "$ROOT/tests/test_et_options.sh"
+
+python3 "$ROOT/tests/test_tmux_discovery.py"

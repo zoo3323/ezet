@@ -51,7 +51,7 @@ printf '#!/usr/bin/env bash\nexit 0\n' > "$work/bin/et"
 cat > "$work/bin/ssh" <<'FAKE_SSH'
 #!/usr/bin/env bash
 for a in "$@"; do case "$a" in -G) exec /usr/bin/ssh "$@" ;; esac; done
-printf '%s\n' '__DT_CONNECTED__' '__DT_TMUX__=/usr/bin/tmux' '__DT_NOW__=1700000000'
+printf '%s\n' '__DT_CONNECTED__' '__DT_TMUX__=/usr/bin/tmux' '__DT_TMUX_SOCKET__=ezet-3.7c' '__DT_NOW__=1700000000'
 printf '%s\n' \
   '__DT_SESSION__|editor|3|attached|1699999950|1699300000|nvim|/home/dev/projects/ezet' \
   '__DT_SESSION__|server|1||1699996400|1699900000|node|/home/dev/api' \

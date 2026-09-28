@@ -83,6 +83,21 @@ awk '
   END {exit bad}
 ' "$tmp/.ssh/config.d/ezet"
 
+# Quick connects now discover the remote binary/server before invoking ET.
+cat > "$fake_et_bin/ssh" <<'QUICK_SSH'
+#!/usr/bin/env bash
+for arg in "$@"; do
+  [ "$arg" != -G ] || exec /usr/bin/ssh "$@"
+done
+if [ "${*: -2}" = "sh -s" ]; then
+  cat >/dev/null
+  printf '%s\n' '__DT_CONNECTED__' '__DT_TMUX__=/usr/bin/tmux' '__DT_TMUX_SOCKET__=ezet-3.7c' '__DT_NOW__=1700000000'
+  exit 0
+fi
+exec /usr/bin/ssh "$@"
+QUICK_SSH
+chmod +x "$fake_et_bin/ssh"
+
 # An external SSH host with its own ET port must pick Eternal Terminal.
 dryrun=$(HOME="$tmp" PATH="$fake_et_bin:/usr/bin:/bin" EZET_DRYRUN=1 "$EZET_BIN" host-ext probe 2>&1)
 case "$dryrun" in
@@ -97,7 +112,7 @@ awk '
   NR==2 && $0=="32022" {port=1}
   NR==3 && $0=="host-ext" {host=1}
   NR==4 && $0=="-c" {command_flag=1}
-  NR==5 && $0=="'\''tmux'\'' new-session -A -s '\''probe'\''" {command=1}
+  NR==5 && $0=="'\''/usr/bin/tmux'\'' -L '\''ezet-3.7c'\'' new-session -A -s '\''probe'\''" {command=1}
   END {exit !(port_flag && port && host && command_flag && command)}
 ' "$fake_et_log"
 
@@ -310,6 +325,7 @@ case "${EZET_FAKE_SSH_MODE:-sessions}" in
     printf '%s\n' \
       '__DT_CONNECTED__' \
       '__DT_TMUX__=/usr/bin/tmux' \
+      '__DT_TMUX_SOCKET__=ezet-3.7c' \
       '__DT_NOW__=1700000000' \
       '__DT_SESSION__|work|1||1699999900|1699993000|bash|/home/user/work/app'
     ;;
@@ -317,12 +333,14 @@ case "${EZET_FAKE_SSH_MODE:-sessions}" in
     printf '%s\n' \
       '__DT_CONNECTED__' \
       '__DT_TMUX__=/usr/bin/tmux' \
+      '__DT_TMUX_SOCKET__=ezet-3.7c' \
       '__DT_NOW__=1700000000'
     ;;
   multi)
     printf '%s\n' \
       '__DT_CONNECTED__' \
       '__DT_TMUX__=/usr/bin/tmux' \
+      '__DT_TMUX_SOCKET__=ezet-3.7c' \
       '__DT_NOW__=1700000000' \
       '__DT_SESSION__|alpha|1||1699999900|1699993000|bash|/home/user/work/app' \
       '__DT_SESSION__|bravo|1||1699999900|1699993000|bash|/home/user'
@@ -330,7 +348,7 @@ case "${EZET_FAKE_SSH_MODE:-sessions}" in
   hostile)
     # Hostile remote: session names mix in '|', arithmetic injection (now[$(...)])
     # and ANSI escapes.
-    printf '%s\n' '__DT_CONNECTED__' '__DT_TMUX__=/usr/bin/tmux' '__DT_NOW__=1700000000'
+    printf '%s\n' '__DT_CONNECTED__' '__DT_TMUX__=/usr/bin/tmux' '__DT_TMUX_SOCKET__=ezet-3.7c' '__DT_NOW__=1700000000'
     printf '__DT_SESSION__|we|ird|2|attached|now[$(touch %s)]|age[$(touch %s)]|bash|/srv/app\n' "$EZET_PWN_MARK" "$EZET_PWN_MARK"
     printf '__DT_SESSION__|\033[31mred\033[0m|1||1699999900|1699993000|bash|/srv/x\n'
     ;;
@@ -487,7 +505,7 @@ send "q"
 expect eof
 EXPECT
 
-grep -F "rename-session -t 'bravo' 'charlie'" "$fake_ssh_log" >/dev/null
+grep -F "'/usr/bin/tmux' -L 'ezet-3.7c' rename-session -t 'bravo' 'charlie'" "$fake_ssh_log" >/dev/null
 
 # The session query must go to `sh -s` over stdin, not as a command argument: an
 # OpenSSH-on-Windows server with WSL bash as DefaultShell mangles double quotes in

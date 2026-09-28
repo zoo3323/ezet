@@ -35,6 +35,11 @@ cat > "$tmp/bin/ssh" <<'FAKE_SSH'
 #!/usr/bin/env bash
 set -eu
 if [ "${1:-}" = -V ]; then printf '%s\n' 'OpenSSH_9.9'; exit 0; fi
+if [ "${*: -2}" = "sh -s" ]; then
+  cat >/dev/null
+  printf '%s\n' '__DT_CONNECTED__' '__DT_TMUX__=/usr/bin/tmux' '__DT_TMUX_SOCKET__=ezet-3.7c' '__DT_NOW__=1700000000'
+  exit 0
+fi
 exec /usr/bin/ssh "$@"
 FAKE_SSH
 chmod +x "$tmp/bin/ssh"

@@ -15,7 +15,7 @@
 # EZET_DRYRUN=1 prints the target instead of connecting (for tests).
 set -euo pipefail
 
-EZET_VERSION="1.0.6"
+EZET_VERSION="1.0.7"
 
 # ── Dedicated SSH config module ──────────────────────────────────
 # Public interface: config_ensure, config_include_present
@@ -365,7 +365,7 @@ fi
 # Connect to a session (attach if it exists, otherwise create it). et first, ssh
 # as the fallback. Deliberately not exec: the caller refreshes the list afterwards.
 connect_session() {
-  local session="$1" tmux_bin tmux_command transport et_port=""
+  local session="$1" tmux_command transport et_port=""
   valid_name "$host" || { echo "ezet: invalid host name (letters/digits/._- only): $host" >&2; exit 2; }
   valid_name "$session" || { echo "ezet: invalid session name (letters/digits/._- only): $session" >&2; exit 2; }
   transport=$(connection_transport "$host")
@@ -380,9 +380,13 @@ connect_session() {
     fi
     exit 0
   fi
-  tmux_bin="${REMOTE_TMUX:-tmux}"
-  if [ "$tmux_bin" != tmux ] && ! valid_remote_tmux_path "$tmux_bin"; then tmux_bin=tmux; fi
-  tmux_command="'$tmux_bin' new-session -A -s '$session'"
+  if [ -z "${REMOTE_TMUX:-}" ]; then
+    if ! fetch_sessions; then
+      printf 'ezet: %s. %s\n' "$FETCH_ERROR" "$FETCH_HINT" >&2
+      return 1
+    fi
+  fi
+  tmux_command="$(remote_tmux_command) new-session -A -s '$session'"
   TERMINAL_SANITIZE_NEEDED=1
   if [ "$transport" = et ]; then
     show_connect_status 'ET + TMUX' "$host ← $session" 'auto-reconnect · Ctrl-C to cancel'
@@ -678,6 +682,16 @@ valid_remote_tmux_path() {
     *) return 1 ;;
   esac
   case "$1" in *[!A-Za-z0-9_./+-]*) return 1 ;; *) return 0 ;; esac
+}
+
+# Query, connect and rename must all address the same server.
+remote_tmux_command() {
+  valid_remote_tmux_path "${REMOTE_TMUX:-}" || return 1
+  printf "'%s'" "$REMOTE_TMUX"
+  if [ -n "${REMOTE_TMUX_SOCKET:-}" ]; then
+    valid_name "$REMOTE_TMUX_SOCKET" || return 1
+    printf " -L '%s'" "$REMOTE_TMUX_SOCKET"
+  fi
 }
 
 # Split a user@host or host input.
@@ -2090,11 +2104,11 @@ pick_host_text() {
 #          FETCH_ERROR/FETCH_HINT/REMOTE_TMUX
 # FETCH_ERROR: the short reason shown inside the table.
 # FETCH_HINT: what to do about it, shown under the table.
-FETCH_ERROR=""; FETCH_HINT=""; REMOTE_TMUX=""
+FETCH_ERROR=""; FETCH_HINT=""; REMOTE_TMUX=""; REMOTE_TMUX_SOCKET=""
 fetch_sessions() {
   local list_raw line payload rest name windows attached activity created cmd path tmux_path
   local connected=0 no_tmux=0 tmux_exec_failed=0 bad_tmux_path=0
-  FETCH_ERROR=""; FETCH_HINT=""; REMOTE_TMUX=""
+  FETCH_ERROR=""; FETCH_HINT=""; REMOTE_TMUX=""; REMOTE_TMUX_SOCKET=""
   # The script goes over stdin to `sh -s` rather than as a command argument: an
   # OpenSSH-on-Windows server whose DefaultShell is WSL bash mangles double quotes
   # inside the argument. Stdin is the pipe, so session keystrokes stay local.
@@ -2105,42 +2119,58 @@ fetch_sessions() {
       case "$1" in *[!A-Za-z0-9_./+-]*) return 1 ;; esac
       [ -f "$1" ] && [ -x "$1" ]
     }
+    # Non-login SSH PATH often hides user/Homebrew installs. Compare runnable
+    # versions rather than taking the first path, without requiring GNU sort -V.
+    tmux_candidate() {
+      valid_tmux_path "$1" || return 0
+      version=$("$1" -V 2>/dev/null) || return 0
+      case "$version" in "tmux "*) version=${version#tmux } ;; *) return 0 ;; esac
+      printf "%s|%s\n" "$1" "$version"
+    }
     find_tmux() {
-      local candidate login_shell
-      candidate=$(command -v tmux 2>/dev/null || true)
-      if valid_tmux_path "$candidate"; then printf "%s\n" "$candidate"; return 0; fi
-
-      for candidate in \
-        /usr/bin/tmux /usr/local/bin/tmux /opt/local/bin/tmux /opt/homebrew/bin/tmux \
-        /home/linuxbrew/.linuxbrew/bin/tmux "$HOME/.local/bin/tmux" \
-        "$HOME/.nix-profile/bin/tmux" /run/current-system/sw/bin/tmux /snap/bin/tmux
-      do
-        if valid_tmux_path "$candidate"; then printf "%s\n" "$candidate"; return 0; fi
-      done
-
-      login_shell="${SHELL:-/bin/sh}"
-      case "$login_shell" in /*) ;; *) login_shell=/bin/sh ;; esac
-      [ -f "$login_shell" ] && [ -x "$login_shell" ] || login_shell=/bin/sh
-      candidate=$("$login_shell" -lc "command -v tmux" 2>/dev/null | sed -n "/^\//{p;q;}")
-      if valid_tmux_path "$candidate"; then printf "%s\n" "$candidate"; return 0; fi
-      candidate=$("$login_shell" -ic "command -v tmux" 2>/dev/null | sed -n "/^\//{p;q;}")
-      if valid_tmux_path "$candidate"; then printf "%s\n" "$candidate"; return 0; fi
-      return 1
+      {
+        tmux_candidate "$(command -v tmux 2>/dev/null || true)"
+        for candidate in \
+          "$HOME/.local/bin/tmux" /opt/homebrew/bin/tmux /usr/local/bin/tmux \
+          /usr/bin/tmux /opt/local/bin/tmux /home/linuxbrew/.linuxbrew/bin/tmux \
+          "$HOME/.nix-profile/bin/tmux" /run/current-system/sw/bin/tmux /snap/bin/tmux
+        do
+          tmux_candidate "$candidate"
+        done
+        login_shell="${SHELL:-/bin/sh}"
+        case "$login_shell" in /*) ;; *) login_shell=/bin/sh ;; esac
+        [ -f "$login_shell" ] && [ -x "$login_shell" ] || login_shell=/bin/sh
+        for mode in -lc -ic; do
+          candidate=$("$login_shell" "$mode" "command -v tmux" 2>/dev/null | sed -n "/^\//{p;q;}")
+          tmux_candidate "$candidate"
+        done
+      } | LC_ALL=C awk -F "|" '
+        $2 ~ /^[0-9]+\.[0-9]+[a-z]*(-next)?$/ {
+          split($2, parts, ".")
+          major=parts[1]+0; minor=parts[2]+0
+          suffix=parts[2]; sub(/^[0-9]+/, "", suffix)
+          if (!best || major>maj || (major==maj && minor>min) ||
+              (major==maj && minor==min && ("x" suffix)>("x" suf))) {
+            best=$0; maj=major; min=minor; suf=suffix
+          }
+        }
+        END { if (best) print best }
+      '
     }
 
     printf "__DT_CONNECTED__\n"
-    tmux_bin=$(find_tmux || true)
-    if [ -z "$tmux_bin" ]; then
+    selected=$(find_tmux)
+    if [ -z "$selected" ]; then
       printf "__DT_NO_TMUX__\n"
       exit 0
     fi
-    if ! "$tmux_bin" -V >/dev/null 2>&1; then
-      printf "__DT_TMUX_EXEC_FAILED__\n"
-      exit 0
-    fi
+    tmux_bin=${selected%|*}
+    tmux_version=${selected##*|}
+    tmux_socket="ezet-$tmux_version"
     printf "__DT_TMUX__=%s\n" "$tmux_bin"
+    printf "__DT_TMUX_SOCKET__=%s\n" "$tmux_socket"
     printf "__DT_NOW__=%s\n" "$(date +%s)"
-    "$tmux_bin" list-sessions -F "__DT_SESSION__|#{session_name}|#{session_windows}|#{?session_attached,attached,}|#{session_activity}|#{session_created}|#{pane_current_command}|#{pane_current_path}" 2>/dev/null || true
+    "$tmux_bin" -L "$tmux_socket" list-sessions -F "__DT_SESSION__|#{session_name}|#{session_windows}|#{?session_attached,attached,}|#{session_activity}|#{session_created}|#{pane_current_command}|#{pane_current_path}" 2>/dev/null || true
 FETCH_SCRIPT
   if ! list_raw=$(printf '%s' "$fetch_script" | ssh "${SSH_CONNECT_OPTIONS[@]}" "$host" sh -s 2>&1); then
     # SSH itself failed. The underlying cause comes from the ssh diagnostic (its
@@ -2179,6 +2209,11 @@ FETCH_SCRIPT
         __DT_TMUX__=*)
           tmux_path="${line#__DT_TMUX__=}"
           if valid_remote_tmux_path "$tmux_path"; then REMOTE_TMUX="$tmux_path"
+          else bad_tmux_path=1
+          fi ;;
+        __DT_TMUX_SOCKET__=*)
+          tmux_path="${line#__DT_TMUX_SOCKET__=}"
+          if valid_name "$tmux_path"; then REMOTE_TMUX_SOCKET="$tmux_path"
           else bad_tmux_path=1
           fi ;;
         __DT_NOW__=*)
@@ -2238,7 +2273,7 @@ FETCH_SCRIPT
     FETCH_HINT="tmux was found but would not run. Check tmux -V on the remote."
     return 1
   fi
-  if [ "$bad_tmux_path" -eq 1 ] || [ -z "$REMOTE_TMUX" ]; then
+  if [ "$bad_tmux_path" -eq 1 ] || [ -z "$REMOTE_TMUX" ] || [ -z "$REMOTE_TMUX_SOCKET" ]; then
     FETCH_ERROR="tmux path unverified"
     FETCH_HINT="Check the remote tmux path, or connect with the SSH row below."
     return 1
@@ -2560,7 +2595,7 @@ if is_tty; then
           tmux_bin="${REMOTE_TMUX:-}"
           if ! valid_remote_tmux_path "$tmux_bin"; then
             session_status err 'Rename failed (remote tmux path unverified).'
-          elif ssh -n "${SSH_CONNECT_OPTIONS[@]}" "$host" "'$tmux_bin' rename-session -t '$old' '$nn'" 2>/dev/null; then
+          elif ssh -n "${SSH_CONNECT_OPTIONS[@]}" "$host" "$(remote_tmux_command) rename-session -t '$old' '$nn'" 2>/dev/null; then
             session_status ok "Renamed: $old -> $nn"
             rename_ok=1
           else
