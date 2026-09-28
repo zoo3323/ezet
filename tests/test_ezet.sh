@@ -300,6 +300,10 @@ done
 printf 'REMOTE' >> "$EZET_FAKE_SSH_LOG"
 for arg in "$@"; do printf '\t%s' "$arg" >> "$EZET_FAKE_SSH_LOG"; done
 printf '\n' >> "$EZET_FAKE_SSH_LOG"
+# The session query arrives as a script on stdin for `sh -s`.
+if [ "$#" -ge 2 ] && [ "${*: -2:1}" = sh ] && [ "${*: -1}" = -s ]; then
+  cat > "$EZET_FAKE_SSH_LOG.stdin"
+fi
 
 case "${EZET_FAKE_SSH_MODE:-sessions}" in
   sessions)
@@ -484,6 +488,15 @@ expect eof
 EXPECT
 
 grep -F "rename-session -t 'bravo' 'charlie'" "$fake_ssh_log" >/dev/null
+
+# The session query must go to `sh -s` over stdin, not as a command argument: an
+# OpenSSH-on-Windows server with WSL bash as DefaultShell mangles double quotes in
+# the argument, so tmux was reported missing.
+grep -E $'^REMOTE\t.*\thost-b\tsh\t-s$' "$fake_ssh_log" >/dev/null
+if grep -F 'valid_tmux_path' "$fake_ssh_log" >/dev/null; then
+  echo "session query script leaked into ssh arguments" >&2; exit 1
+fi
+grep -F 'list-sessions -F "__DT_SESSION__|' "$fake_ssh_log.stdin" >/dev/null
 
 # Session fields sent by the remote are never trusted.
 #   - Arithmetic injection in a name (now[$(cmd)]) must not run a local command

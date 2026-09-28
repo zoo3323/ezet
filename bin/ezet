@@ -15,7 +15,7 @@
 # EZET_DRYRUN=1 prints the target instead of connecting (for tests).
 set -euo pipefail
 
-EZET_VERSION="1.0.5"
+EZET_VERSION="1.0.6"
 
 # ── Dedicated SSH config module ──────────────────────────────────
 # Public interface: config_ensure, config_include_present
@@ -2095,8 +2095,11 @@ fetch_sessions() {
   local list_raw line payload rest name windows attached activity created cmd path tmux_path
   local connected=0 no_tmux=0 tmux_exec_failed=0 bad_tmux_path=0
   FETCH_ERROR=""; FETCH_HINT=""; REMOTE_TMUX=""
-  # -n keeps ssh from consuming local stdin, which would eat the session keystrokes.
-  if ! list_raw=$(ssh -n "${SSH_CONNECT_OPTIONS[@]}" "$host" '
+  # The script goes over stdin to `sh -s` rather than as a command argument: an
+  # OpenSSH-on-Windows server whose DefaultShell is WSL bash mangles double quotes
+  # inside the argument. Stdin is the pipe, so session keystrokes stay local.
+  local fetch_script
+  IFS= read -r -d '' fetch_script <<'FETCH_SCRIPT' || true
     valid_tmux_path() {
       case "$1" in /*) ;; *) return 1 ;; esac
       case "$1" in *[!A-Za-z0-9_./+-]*) return 1 ;; esac
@@ -2138,7 +2141,8 @@ fetch_sessions() {
     printf "__DT_TMUX__=%s\n" "$tmux_bin"
     printf "__DT_NOW__=%s\n" "$(date +%s)"
     "$tmux_bin" list-sessions -F "__DT_SESSION__|#{session_name}|#{session_windows}|#{?session_attached,attached,}|#{session_activity}|#{session_created}|#{pane_current_command}|#{pane_current_path}" 2>/dev/null || true
-  ' 2>&1); then
+FETCH_SCRIPT
+  if ! list_raw=$(printf '%s' "$fetch_script" | ssh "${SSH_CONNECT_OPTIONS[@]}" "$host" sh -s 2>&1); then
     # SSH itself failed. The underlying cause comes from the ssh diagnostic (its
     # wording is fixed English).
     case "$list_raw" in

@@ -83,6 +83,11 @@ OpenSSH가 해석할 수 없기 때문입니다. 윈도우에서는 WSL을 쓰�
 접속하는 `SSH Direct` 행을 제공합니다. 이 경로는 실제 cmd.exe 동작(여러 줄 명령의 첫
 줄만 실행하고 종료코드 0)을 재현하는 대역으로 테스트에서 검증합니다.
 
+윈도우 호스트의 WSL 안 tmux 세션을 보려면, 그 PC에서 OpenSSH 기본 셸을 WSL bash로
+바꾸세요(관리자 PowerShell):
+`New-ItemProperty -Path "HKLM:\SOFTWARE\OpenSSH" -Name DefaultShell -Value "C:\Windows\System32\bash.exe" -PropertyType String -Force`.
+SSH 접속에만 적용되고, PC에서 직접 여는 PowerShell·cmd 창은 그대로입니다.
+
 ## SSH 설정
 
 ezet 호스트는 `~/.ssh/config.d/ezet`에 저장됩니다. 기존 설정에는 `Include` 한 줄만 추가하며, 변경 전 백업을 만듭니다. ET 포트는 다음처럼 주석으로 저장됩니다.

@@ -84,6 +84,11 @@ and offers the `SSH Direct` row to connect without tmux. This path is covered by
 test suite with a stub that reproduces the real cmd.exe behaviour (it runs only the
 first line of a multi-line command and still exits 0).
 
+To see the tmux sessions inside WSL on a Windows host, set OpenSSH's default shell
+to WSL bash on that machine (admin PowerShell):
+`New-ItemProperty -Path "HKLM:\SOFTWARE\OpenSSH" -Name DefaultShell -Value "C:\Windows\System32\bash.exe" -PropertyType String -Force`.
+This only changes SSH logins; local PowerShell and cmd windows are unaffected.
+
 ## SSH config
 
 ezet hosts live in `~/.ssh/config.d/ezet`. Your existing config only gains a single `Include` line, and it is backed up before the change. ET ports are stored as a comment:
