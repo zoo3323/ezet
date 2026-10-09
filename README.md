@@ -119,6 +119,16 @@ An optional custom ET recovery-buffer patch outside ezet can lower the bound to 
 
 `ezet --uninstall` removes only the `Include` line ezet added.
 
+### ET reconnect memory patch
+
+[`tools/et-reconnect-memory.patch`](tools/et-reconnect-memory.patch) streams recovery output, preserves partial packets when recovery fails, and validates packet lengths before reading in bounded chunks. It preserves the existing wire protocol. The build helper selects an 8 MiB recovery buffer; connections that exceed that replay window can still fail to recover.
+
+Prepare an ET checkout at `a8367415783a64405c62c70b755b4c09b410532b` with its submodules initialized, plus a compiler, CMake, protobuf, OpenSSL and libsodium development packages. Run `./tools/build-et-memory-fix.sh ET_SOURCE BUILD_DIR [cmake options...]`. On macOS, add `-DCMAKE_PREFIX_PATH=/opt/homebrew -DCMAKE_OSX_SYSROOT=$(xcrun --show-sdk-path)` if needed.
+
+On a Linux server using `/usr/local/bin` and `et.service`, run `sudo ./tools/install-et-memory-fix.sh BUILD_DIR`. This restarts ET and disconnects clients; preserve work in tmux first. Previous binaries are saved under `/usr/local/lib/ezet-et-backup.*`, and the existing memory limit and restart policy are retained.
+
+The patch derived from ET source is licensed under [Apache-2.0](tools/et-reconnect-memory.LICENSE).
+
 ## Development
 
 ```bash

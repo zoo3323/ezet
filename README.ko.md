@@ -118,6 +118,25 @@ ezet과 별개로 ET에 적용하는 사용자 패치로 복구 버퍼 상한을
 
 `ezet --uninstall`은 ezet이 추가한 `Include`만 제거합니다.
 
+### ET 재접속 메모리 패치
+
+[`tools/et-reconnect-memory.patch`](tools/et-reconnect-memory.patch)는 ET의 재접속 데이터 복사를 줄이고, 복구 실패 시 기존 패킷 읽기 상태를 보존하며, 패킷 길이 검사와 청크 단위 읽기를 추가합니다. 기존 프로토콜과 호환됩니다. 재빌드 도구는 기존 사용자 설정처럼 복구 버퍼를 8MiB로 설정합니다. 연결이 너무 오래 끊겨 복구 범위를 벗어나는 경우는 남아 있습니다.
+
+컴파일러, CMake, protobuf, OpenSSL, libsodium 개발 패키지가 필요합니다. ET 체크아웃과 submodule을 준비한 뒤 실행하세요. macOS는 CMake 옵션에 `-DCMAKE_PREFIX_PATH=/opt/homebrew -DCMAKE_OSX_SYSROOT=$(xcrun --show-sdk-path)`를 추가할 수 있습니다.
+
+```bash
+git clone https://github.com/MisterTea/EternalTerminal.git /tmp/et-memory-fix
+git -C /tmp/et-memory-fix checkout a8367415783a64405c62c70b755b4c09b410532b
+git -C /tmp/et-memory-fix submodule update --init --recursive
+./tools/build-et-memory-fix.sh /tmp/et-memory-fix /tmp/et-memory-fix/build
+# Linux 운영 서버에 적용: 기존 연결이 끊기므로 tmux 세션에서 작업을 보존하세요.
+sudo ./tools/install-et-memory-fix.sh /tmp/et-memory-fix/build
+```
+
+설치 도구는 이전 바이너리를 `/usr/local/lib/ezet-et-backup.*`에 보관하고 `et.service`를 재시작합니다. 기존 메모리 제한과 재시작 정책은 유지됩니다.
+
+ET 소스에서 파생된 패치는 [Apache-2.0](tools/et-reconnect-memory.LICENSE) 라이선스를 따릅니다.
+
 ## 개발
 
 ```bash
