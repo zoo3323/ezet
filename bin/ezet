@@ -2012,7 +2012,7 @@ pick_host() {
   HOST_ORDER_MODE=0
   # The ET label follows the same rule as the real transport, so check once whether et
   # is installed.
-  if command -v et >/dev/null 2>&1; then et_ok=1; else et_ok=0; fi
+  if resolve_et_client; then et_ok=1; else et_ok=0; fi
   while true; do
     hosts=()
     while IFS= read -r h; do [ -n "$h" ] && hosts+=("$h"); done < <(list_host_aliases)

@@ -2,6 +2,7 @@
 """Exercise client selection and install transactions in disposable directories."""
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -158,6 +159,30 @@ case "${*: -1}" in */et/current) kill -TERM "$PPID" ;; esac
         self.assertNotEqual(self.ezet("--install-et", self.build("new"), check=False).returncode, 0)
         self.assertTrue((self.data / "et/current").is_symlink())
         self.assertEqual(list(folder.iterdir()), [])
+
+    def test_host_menu_shows_managed_et_when_no_system_client_is_available(self):
+        expect = shutil.which("expect")
+        if not expect:
+            self.skipTest("expect is required for the interactive menu test")
+        env = dict(self.env, PATH=f"{self.bin}:/usr/bin:/bin", TERM="xterm-256color",
+                   TEST_EZET=str(ROOT / "bin/ezet"))
+        (self.bin / "et").unlink()
+        if shutil.which("et", path=env["PATH"]):
+            self.skipTest("this fixture needs a PATH without a system ET client")
+        self.ezet("--install-et", self.build("managed"), env=env)
+        result = subprocess.run([expect], input='''set timeout 3
+spawn -noecho $env(TEST_EZET)
+expect {
+  "ET 2022" {}
+  timeout {exit 71}
+  eof {exit 72}
+}
+send -- "q"
+expect eof
+set result [wait]
+exit [lindex $result 3]
+''', env=env, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_custom_prefix_fresh_install_requires_no_service_or_root(self):
         prefix = self.root / "custom prefix"
