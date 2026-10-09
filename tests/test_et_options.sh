@@ -138,11 +138,12 @@ helper_count="$tmp/helper-count"
 helper_section=$(awk '/^# ── ET client options/{on=1} on && /^doctor_file_mode\(\) \{/{exit} on' "$ROOT/bin/ezet")
 (
   EZET_HOSTS_FILE="$tmp/.ssh/config.d/ezet"
+  EZET_DATA_DIR="$tmp/data"
   EZET_HELP_COUNT_FILE="$helper_count"
   EZET_HELP_KIND=supported
   EZET_ET_LOG="$tmp/helper-et.log"
   PATH="$tmp/bin:/usr/bin:/bin"
-  export EZET_HOSTS_FILE EZET_HELP_COUNT_FILE EZET_HELP_KIND EZET_ET_LOG PATH
+  export EZET_HOSTS_FILE EZET_DATA_DIR EZET_HELP_COUNT_FILE EZET_HELP_KIND EZET_ET_LOG PATH
   eval "$helper_section"
   et_client_options opted
   [ "${#ET_OPTIONS[@]}" -eq 1 ]

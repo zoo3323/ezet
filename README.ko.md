@@ -46,6 +46,8 @@ curl -fsSL https://raw.githubusercontent.com/zoo3323/ezet/main/install.sh | bash
 
 ET 자동 재연결을 사용하려면 로컬에 `et`, 원격 호스트에 `etserver`를 설치하세요. 설치하지 않아도 SSH로 접속할 수 있습니다.
 
+재접속 메모리 패치를 포함한 ET를 ezet에서 설치·업데이트하려면 아래 [ET 재접속 메모리 패치](#et-재접속-메모리-패치)를 참고하세요.
+
 ## 사용
 
 ```bash
@@ -117,6 +119,37 @@ ezet에서 연결 설정을 편집하면 opt-in marker가 지워지고, alias만
 ezet과 별개로 ET에 적용하는 사용자 패치로 복구 버퍼 상한을 8MiB로 낮출 수 있으며, 이전 upstream 제안은 철회됐습니다. 이는 메모리와 복구 범위 사이의 절충이며, 오래된 세션 문제를 해결하거나 고정된 메모리 상한을 보장하지 않습니다. backpressure로 읽기가 멈출 수 있고 tmux도 ET scrollback을 무제한 보존하지 않습니다. 자세한 배경은 [PR #846 논의](https://github.com/MisterTea/EternalTerminal/pull/846#issuecomment-5753440337)를 참고하세요.
 
 `ezet --uninstall`은 ezet이 추가한 `Include`만 제거합니다.
+
+### ET 재접속 메모리 패치
+
+[`tools/et-reconnect-memory.patch`](tools/et-reconnect-memory.patch)는 ET의 재접속 데이터 복사를 줄이고, 복구 실패 시 기존 패킷 읽기 상태를 보존하며, 패킷 길이 검사와 청크 단위 읽기를 추가합니다. 기존 프로토콜과 호환됩니다. 복구 버퍼 기본값은 upstream과 같은 64MiB이며, 메모리와 복구 범위를 절충하려는 경우에만 8MiB 등을 선택하세요. 연결이 너무 오래 끊겨 복구 범위를 벗어나는 경우는 남아 있습니다.
+
+컴파일러, Git, CMake, protobuf, OpenSSL, libsodium 개발 패키지가 필요합니다. macOS에서는 Homebrew prefix와 SDK를 자동 탐색합니다. 소스 빌드와 테스트가 성공한 ET 클라이언트를 설치하려면 다음처럼 실행하세요. 업데이트도 같은 명령을 사용합니다.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zoo3323/ezet/main/install.sh | EZET_WITH_PATCHED_ET=1 bash
+ezet --doctor       # 선택된 ET 실행 경로 확인
+ezet --rollback-et  # 이전 관리 설치본으로 복원
+```
+
+일반 설치는 ET를 빌드하거나 교체하지 않습니다. 관리 설치본은 `${XDG_DATA_HOME:-$HOME/.local/share}/ezet`에 저장하며 `EZET_DATA_DIR`로 변경할 수 있습니다. ezet은 `EZET_ET_BIN`으로 명시한 실행 파일, 관리 설치본, PATH의 `et` 순서로 선택합니다. 예를 들어 `EZET_ET_BIN=et ezet`은 시스템 ET를 사용합니다. Homebrew 파일과 일반 `et` 명령은 변경하지 않습니다. 실행 중인 연결은 설치 당시의 바이너리를 계속 사용합니다. 관리 버전들은 자동 삭제하지 않습니다.
+
+설치 시 `EZET_ET_RECOVERY_BUFFER_MIB=8`을 지정하면 작은 복구 버퍼를 선택할 수 있고, `EZET_REF`에 태그나 커밋을 지정하면 ezet 도구 버전을 고정할 수 있습니다. 다른 ezet이 PATH에서 먼저 발견되면 설치 도구가 알려 주므로 설치된 경로로 실행하거나 PATH 순서를 조정하세요.
+
+체크아웃한 코드에서 직접 빌드하거나 원격 서버에 설치할 수도 있습니다. 빌드 도구는 고정된 ET 커밋과 필요한 submodule을 준비합니다. 기존 ET 소스가 있으면 `--fetch WORK_DIR` 대신 `ET_SOURCE BUILD_DIR`를 전달하고, 추가 CMake 옵션을 뒤에 붙이세요.
+
+```bash
+./tools/build-et-memory-fix.sh --fetch "${TMPDIR:-/tmp}/ezet-et-build"
+./bin/ezet --install-et "${TMPDIR:-/tmp}/ezet-et-build/build"
+# 서버에서 실행: prefix 기본값 /usr/local, 서비스 재시작은 명시한 경우에만 수행
+sudo ./tools/install-et-memory-fix.sh /path/to/build --prefix /usr/local --service et.service
+# 사용자 폴더에 바이너리만 설치할 때는 sudo와 --service 없이 실행 가능
+./tools/install-et-memory-fix.sh /path/to/build --prefix "$HOME/.local"
+```
+
+서버 설치 도구는 이전 바이너리를 `PREFIX/lib/ezet/et-backup.*`에 보관합니다. 서비스 재시작 실패 시 이전 바이너리를 복원합니다. 서비스 구성은 수정하지 않으므로 해당 서비스의 실행 경로가 선택한 prefix를 가리켜야 합니다. 재시작하면 ET 연결이 끊기므로 작업은 tmux에 보존하세요. 서버의 기존 메모리 제한과 재시작 정책은 유지됩니다.
+
+ET 소스에서 파생된 패치는 [Apache-2.0](tools/et-reconnect-memory.LICENSE) 라이선스를 따릅니다.
 
 ## 개발
 
