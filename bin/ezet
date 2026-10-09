@@ -161,7 +161,7 @@ manage_et_client() (
     printf 'ezet: another ET install is running (%s)\n' "$root/.install-lock" >&2
     exit 1
   }
-  # shellcheck disable=SC2329 # Invoked by the EXIT trap.
+  # shellcheck disable=SC2329,SC2317 # Invoked indirectly by the EXIT trap.
   cleanup_et_install() {
     rm -f "$root/.current.$$" "$root/.previous.$$"
     if [ -n "$release" ] && { [ ! -L "$root/current" ] || [ "$(readlink "$root/current")" != "releases/${release##*/}/bin/et" ]; }; then
@@ -178,9 +178,10 @@ manage_et_client() (
   done
   [ ! -L "$root/current" ] || old=$(readlink "$root/current")
   if [ "$action" = install ]; then
-    [ -f "$build/et" ] && [ -x "$build/et" ] || {
-      printf 'ezet: missing executable %s/et\n' "$build" >&2; exit 1;
-    }
+    if [ ! -f "$build/et" ] || [ ! -x "$build/et" ]; then
+      printf 'ezet: missing executable %s/et\n' "$build" >&2
+      exit 1
+    fi
     release=$(mktemp -d "$root/releases/build.XXXXXXXX")
     mkdir "$release/bin"
     cp "$build/et" "$release/bin/et"
