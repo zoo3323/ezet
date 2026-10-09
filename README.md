@@ -48,6 +48,8 @@ For ET auto-reconnect, install `et` locally and `etserver` on the remote host. W
 
 ## Usage
 
+For an ezet-managed ET client with the reconnect memory fix, see [ET reconnect memory patch](#et-reconnect-memory-patch).
+
 ```bash
 ezet                 # pick a host
 ezet <host>          # pick a session
@@ -121,11 +123,28 @@ An optional custom ET recovery-buffer patch outside ezet can lower the bound to 
 
 ### ET reconnect memory patch
 
-[`tools/et-reconnect-memory.patch`](tools/et-reconnect-memory.patch) streams recovery output, preserves partial packets when recovery fails, and validates packet lengths before reading in bounded chunks. It preserves the existing wire protocol. The build helper selects an 8 MiB recovery buffer; connections that exceed that replay window can still fail to recover.
+[`tools/et-reconnect-memory.patch`](tools/et-reconnect-memory.patch) streams recovery output, preserves partial packets when recovery fails, and validates packet lengths before reading in bounded chunks. It preserves the existing wire protocol and the upstream 64 MiB replay window by default. A smaller window is optional; connections that exceed it can still fail to recover.
 
-Prepare an ET checkout at `a8367415783a64405c62c70b755b4c09b410532b` with its submodules initialized, plus a compiler, CMake, protobuf, OpenSSL and libsodium development packages. Run `./tools/build-et-memory-fix.sh ET_SOURCE BUILD_DIR [cmake options...]`. On macOS, add `-DCMAKE_PREFIX_PATH=/opt/homebrew -DCMAKE_OSX_SYSROOT=$(xcrun --show-sdk-path)` if needed.
+With Git, a compiler, CMake, protobuf, OpenSSL and libsodium development packages installed, opt into building and selecting a tested, ezet-managed ET client. Homebrew's prefix and the SDK are detected on macOS. Repeat the install command to update:
 
-On a Linux server using `/usr/local/bin` and `et.service`, run `sudo ./tools/install-et-memory-fix.sh BUILD_DIR`. This restarts ET and disconnects clients; preserve work in tmux first. Previous binaries are saved under `/usr/local/lib/ezet-et-backup.*`, and the existing memory limit and restart policy are retained.
+```bash
+curl -fsSL https://raw.githubusercontent.com/zoo3323/ezet/main/install.sh | EZET_WITH_PATCHED_ET=1 bash
+ezet --doctor       # inspect the selected client path
+ezet --rollback-et  # restore the previous managed client
+```
+
+Regular installs do not build or replace ET. Managed releases live under `${XDG_DATA_HOME:-$HOME/.local/share}/ezet`, configurable with `EZET_DATA_DIR`. Selection priority is `EZET_ET_BIN`, the managed client, then `et` on PATH. `EZET_ET_BIN=et ezet` selects the system client. Package-manager files and the ordinary `et` command are unchanged; running connections keep their original binary. Managed releases are retained. Set `EZET_ET_RECOVERY_BUFFER_MIB=8` to opt into a smaller buffer or `EZET_REF` to pin the ezet tools to a tag or commit. The installer reports if another ezet takes precedence on PATH.
+
+From a checkout, build the pinned ET source and its required submodules directly, or install server binaries separately:
+
+```bash
+./tools/build-et-memory-fix.sh --fetch "${TMPDIR:-/tmp}/ezet-et-build"
+./bin/ezet --install-et "${TMPDIR:-/tmp}/ezet-et-build/build"
+sudo ./tools/install-et-memory-fix.sh /path/to/build --prefix /usr/local --service et.service
+./tools/install-et-memory-fix.sh /path/to/build --prefix "$HOME/.local"
+```
+
+Existing source can be passed as `ET_SOURCE BUILD_DIR [cmake options...]` instead of `--fetch WORK_DIR`. Server installation defaults to `/usr/local`; a service is restarted only when `--service` is supplied. Backups are kept under `PREFIX/lib/ezet/et-backup.*`, with rollback if restarting the service fails. Service configuration is preserved, so its executable path must match the selected prefix. Restarting disconnects ET clients; preserve work in tmux. Existing memory limits and restart policies remain in place. User-owned prefixes need no sudo.
 
 The patch derived from ET source is licensed under [Apache-2.0](tools/et-reconnect-memory.LICENSE).
 

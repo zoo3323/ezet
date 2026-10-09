@@ -11,12 +11,27 @@
 # Environment:
 #   EZET_INSTALL_DIR   install directory (default ~/.local/bin)
 #   EZET_REF           git ref to download (default main)
+#   EZET_WITH_PATCHED_ET=1  build and select ezet-managed ET (requires build deps)
+#   EZET_DATA_DIR      data directory (default $XDG_DATA_HOME/ezet or ~/.local/share/ezet)
+#   EZET_ET_RECOVERY_BUFFER_MIB  replay window for this build (default 64)
 set -euo pipefail
 
 REPO="zoo3323/ezet"
 REF="${EZET_REF:-main}"
 BINDIR="${EZET_INSTALL_DIR:-$HOME/.local/bin}"
 RAW="https://raw.githubusercontent.com/$REPO/$REF/bin/ezet"
+DATA="${EZET_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/ezet}"
+case "${EZET_WITH_PATCHED_ET:-0}" in
+  0|1) ;;
+  *) printf 'EZET_WITH_PATCHED_ET must be 0 or 1\n' >&2; exit 2 ;;
+esac
+
+download() {
+  if command -v curl >/dev/null 2>&1; then curl -fsSL "$1" -o "$2"
+  elif command -v wget >/dev/null 2>&1; then wget -qO "$2" "$1"
+  else printf 'curl or wget is required.\n' >&2; return 1
+  fi
+}
 
 c_g=''; c_y=''; c_b=''; c_d=''; c_r=''
 if [ -t 1 ]; then c_g=$'\e[32m'; c_y=$'\e[33m'; c_b=$'\e[1m'; c_d=$'\e[2m'; c_r=$'\e[0m'; fi
@@ -31,12 +46,7 @@ os="$(uname -s 2>/dev/null || echo unknown)"
 step "Downloading ezet  ($REF -> $BINDIR/ezet)"
 mkdir -p "$BINDIR"
 tmp="$BINDIR/.ezet.download.$$"
-if command -v curl >/dev/null 2>&1; then
-  curl -fsSL "$RAW" -o "$tmp"
-elif command -v wget >/dev/null 2>&1; then
-  wget -qO "$tmp" "$RAW"
-else
-  say "curl or wget is required." >&2
+if ! download "$RAW" "$tmp"; then
   rm -f "$tmp" 2>/dev/null || true
   exit 1
 fi
@@ -64,10 +74,38 @@ case ":$PATH:" in
     printf '\n    echo '\''export PATH="%s:$PATH"'\'' >> %s && source %s\n' "$BINDIR" "$rc" "$rc"
     ;;
 esac
+resolved_ezet=$(command -v ezet 2>/dev/null || true)
+if [ -n "$resolved_ezet" ] && [ "$resolved_ezet" != "$BINDIR/ezet" ]; then
+  warn "Your shell finds $resolved_ezet first. Use $BINDIR/ezet or put $BINDIR first on PATH."
+fi
 
 # ── 3) Optional dependency: Eternal Terminal ─────────────────
+if [ "${EZET_WITH_PATCHED_ET:-0}" = 1 ]; then
+  step "Building ezet-managed Eternal Terminal"
+  if ! "$BINDIR/ezet" --help 2>&1 | grep -q -- '--install-et'; then
+    say "This ezet ref does not support managed ET. Select a newer EZET_REF." >&2
+    exit 1
+  fi
+  mkdir -p "$DATA/tools"
+  for name in build-et-memory-fix.sh et-reconnect-memory.patch et-reconnect-memory.LICENSE; do
+    tool_tmp="$DATA/tools/.$name.download.$$"
+    if ! download "https://raw.githubusercontent.com/$REPO/$REF/tools/$name" "$tool_tmp"; then
+      rm -f "$tool_tmp"
+      exit 1
+    fi
+    mv -f "$tool_tmp" "$DATA/tools/$name"
+  done
+  # A changed patch gets a fresh checkout, so updates never reset a user's source.
+  patch_id=$(cmake -E sha256sum "$DATA/tools/et-reconnect-memory.patch" | awk '{print $1}')
+  base=$(awk -F= '$1=="BASE" {print $2; exit}' "$DATA/tools/build-et-memory-fix.sh")
+  case "$base" in ''|*[!0-9a-f]*) say "Invalid ET source revision." >&2; exit 1 ;; esac
+  work="$DATA/et-build/$base-$patch_id"
+  bash "$DATA/tools/build-et-memory-fix.sh" --fetch "$work" \
+    "-DET_RECOVERY_BUFFER_MIB=${EZET_ET_RECOVERY_BUFFER_MIB:-64}"
+  "$BINDIR/ezet" --install-et "$work/build"
+fi
 step "Checking the optional dependency (Eternal Terminal)"
-if command -v et >/dev/null 2>&1; then
+if [ -x "$DATA/et/current" ] || command -v et >/dev/null 2>&1; then
   ok "Eternal Terminal is installed - sessions reconnect across network changes"
 else
   warn "Eternal Terminal (et) is missing. ezet works over ssh without it, but installing it turns on auto-reconnect:"
