@@ -15,7 +15,7 @@
 # EZET_DRYRUN=1 prints the target instead of connecting (for tests).
 set -euo pipefail
 
-EZET_VERSION="1.0.8"
+EZET_VERSION="1.0.9"
 
 # ── Dedicated SSH config module ──────────────────────────────────
 # Public interface: config_ensure, config_include_present
