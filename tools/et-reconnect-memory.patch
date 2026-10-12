@@ -4,14 +4,14 @@ index 292f9b004..5a6a3958c 100644
 +++ b/CMakeLists.txt
 @@ -114,6 +114,11 @@ project(EternalTCP VERSION 7.0.0 LANGUAGES C CXX)
  include(CMakeFindDependencyMacro)
- 
+
  option(BUILD_TESTING "Build tests" ON)
 +set(ET_RECOVERY_BUFFER_MIB 64 CACHE STRING "Per-connection replay and disconnect buffer size in MiB")
 +if(NOT ET_RECOVERY_BUFFER_MIB MATCHES "^[1-9][0-9]*$" OR ET_RECOVERY_BUFFER_MIB GREATER 64)
 +  message(FATAL_ERROR "ET_RECOVERY_BUFFER_MIB must be between 1 and 64")
 +endif()
 +add_compile_definitions(ET_RECOVERY_BUFFER_MIB=${ET_RECOVERY_BUFFER_MIB})
- 
+
  # Add cmake script directory.
  list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 diff --git a/src/base/BackedReader.cpp b/src/base/BackedReader.cpp
@@ -53,7 +53,7 @@ index f93b7c432..e3a052f87 100644
 @@ -104,6 +112,16 @@ void BackedReader::revive(int newSocketFd,
    socketFd = newSocketFd;
  }
- 
+
 +void BackedReader::reviveFromCatchup(int newSocketFd, CatchupBuffer& catchup) {
 +  partialMessage = "";
 +  sequenceNumber += catchup.buffer_size();
@@ -74,7 +74,7 @@ index 27d52e764..734bfc500 100644
 @@ -54,6 +54,16 @@ class BackedReader {
     */
    void revive(int newSocketFd, const vector<string>& newLocalEntries);
- 
+
 +  /** @brief Takes ownership of received replay strings, avoiding backlog
 +   * copies.
 +   */
@@ -89,12 +89,12 @@ index 27d52e764..734bfc500 100644
     * @brief Marks the reader as disconnected so callers stop issuing reads.
     */
 diff --git a/src/base/BackedWriter.cpp b/src/base/BackedWriter.cpp
-index 1de25d5f1..3aad5db56 100644
+index 1de25d5f1..40e632d77 100644
 --- a/src/base/BackedWriter.cpp
 +++ b/src/base/BackedWriter.cpp
 @@ -3,6 +3,60 @@
  #include <cstdint>
- 
+
  namespace et {
 +namespace {
 +// CatchupBuffer is repeated bytes field 1. Stream its protobuf encoding rather
@@ -153,10 +153,10 @@ index 1de25d5f1..3aad5db56 100644
  BackedWriter::BackedWriter(std::shared_ptr<SocketHandler> socketHandler_,
                             std::shared_ptr<CryptoHandler> cryptoHandler_,
                             int socketFd_)
-@@ -83,34 +137,55 @@ BackedWriterWriteState BackedWriter::write(Packet packet) {
+@@ -83,34 +137,65 @@ BackedWriterWriteState BackedWriter::write(Packet packet) {
    }
  }
- 
+
 -vector<std::string> BackedWriter::recover(int64_t lastValidSequenceNumber) {
 +int64_t BackedWriter::recoveryCount(int64_t lastValidSequenceNumber) const {
    if (socketFd >= 0) {
@@ -201,8 +201,7 @@ index 1de25d5f1..3aad5db56 100644
 +  return retval;
 +}
 +
-+void BackedWriter::writeRecovery(int fd, int64_t lastValidSequenceNumber) {
-+  int64_t count = recoveryCount(lastValidSequenceNumber);
++int64_t BackedWriter::recoveryLength(int64_t count) const {
 +  int64_t length = 0;
 +  auto end = backupBuffer.begin() + count;
 +  for (auto it = backupBuffer.begin(); it != end; ++it) {
@@ -211,6 +210,17 @@ index 1de25d5f1..3aad5db56 100644
 +  if (length > SocketHandler::DEFAULT_MAX_PROTO_LENGTH) {
 +    throw std::runtime_error("Recovery message exceeds protocol size limit");
 +  }
++  return length;
++}
++
++void BackedWriter::validateRecovery(int64_t lastValidSequenceNumber) const {
++  (void)recoveryLength(recoveryCount(lastValidSequenceNumber));
++}
++
++void BackedWriter::writeRecovery(int fd, int64_t lastValidSequenceNumber) {
++  int64_t count = recoveryCount(lastValidSequenceNumber);
++  int64_t length = recoveryLength(count);
++  auto end = backupBuffer.begin() + count;
 +  socketHandler->writeAllOrThrow(fd, &length, sizeof(length), true);
 +  RecoveryOutput output(*socketHandler, fd);
 +  while (end != backupBuffer.begin()) {
@@ -223,16 +233,16 @@ index 1de25d5f1..3aad5db56 100644
 -  throw std::runtime_error("Client is too far behind server.");
 +  output.flush();
  }
- 
+
  void BackedWriter::revive(int newSocketFd) {
 diff --git a/src/base/BackedWriter.hpp b/src/base/BackedWriter.hpp
-index df68dec53..bc064e2e9 100644
+index df68dec53..3b351ad33 100644
 --- a/src/base/BackedWriter.hpp
 +++ b/src/base/BackedWriter.hpp
 @@ -6,6 +6,10 @@
  #include "Packet.hpp"
  #include "SocketHandler.hpp"
- 
+
 +#ifndef ET_RECOVERY_BUFFER_MIB
 +#define ET_RECOVERY_BUFFER_MIB 64
 +#endif
@@ -253,39 +263,66 @@ index df68dec53..bc064e2e9 100644
 +  /** @brief New bytes buffered after disconnect, before applying backpressure.
 +   */
 +  static const int64_t DISCONNECT_BUFFER_BYTES = MAX_BACKUP_BYTES;
- 
+
    /**
     * @brief Creates a writer bound to a socket and crypto pair.
-@@ -55,6 +60,12 @@ class BackedWriter {
+@@ -55,6 +60,15 @@ class BackedWriter {
     */
    vector<std::string> recover(int64_t lastValidSequenceNumber);
- 
+
 +  /**
 +   * @brief Streams the existing CatchupBuffer wire format with 64 KiB scratch
 +   * space. The caller must hold getRecoverMutex() throughout recovery.
 +   */
 +  void writeRecovery(int fd, int64_t lastValidSequenceNumber);
 +
++  /** @brief Checks replay bounds before receiving the peer's catchup. */
++  void validateRecovery(int64_t lastValidSequenceNumber) const;
++
    /**
     * @brief Points the writer at a new socket fd so writes can resume.
     */
-@@ -95,6 +106,8 @@ class BackedWriter {
+@@ -95,6 +109,9 @@ class BackedWriter {
    inline int64_t getSequenceNumber() { return sequenceNumber; }
- 
+
   protected:
 +  /** @brief Validates replay range before allocating or writing any backlog. */
 +  int64_t recoveryCount(int64_t lastValidSequenceNumber) const;
++  int64_t recoveryLength(int64_t count) const;
    /** @brief Synchronizes access to socket state and backup buffer. */
    mutex recoverMutex;
    /** @brief Platform socket helper. */
+diff --git a/src/base/ClientConnection.hpp b/src/base/ClientConnection.hpp
+index 94aaa5001..2bfc77c1e 100644
+--- a/src/base/ClientConnection.hpp
++++ b/src/base/ClientConnection.hpp
+@@ -39,6 +39,9 @@ class ClientConnection : public Connection {
+   void waitReconnect();
+
+  protected:
++  // The server sends first; the client must drain it before sending its replay.
++  bool recover(int fd) { return Connection::recover(fd, true); }
++
+   /**
+    * @brief Background loop used to re-establish a connection when lost.
+    */
 diff --git a/src/base/Connection.cpp b/src/base/Connection.cpp
-index d95674388..7da958383 100644
+index d95674388..a9635f411 100644
 --- a/src/base/Connection.cpp
 +++ b/src/base/Connection.cpp
-@@ -128,25 +128,13 @@ bool Connection::recover(int newSocketFd) {
+@@ -102,7 +102,7 @@ void Connection::closeSocket() {
+   VLOG(1) << "Closed socket";
+ }
+
+-bool Connection::recover(int newSocketFd) {
++bool Connection::recover(int newSocketFd, bool readPeerCatchupFirst) {
+   LOG(INFO) << "Locking reader/writer to recover...";
+   lock_guard<std::recursive_mutex> guard(connectionMutex);
+   if (shuttingDown) {
+@@ -128,25 +128,21 @@ bool Connection::recover(int newSocketFd) {
          socketHandler->readProto<et::SequenceHeader>(
              newSocketFd, true, SocketHandler::MAX_HANDSHAKE_PROTO_LENGTH);
- 
+
 -    {
 -      // Fetch the catchup bytes and send
 -      et::CatchupBuffer catchupBuffer;
@@ -295,12 +332,22 @@ index d95674388..7da958383 100644
 -        catchupBuffer.add_buffer(it);
 -      }
 -      socketHandler->writeProto(newSocketFd, catchupBuffer, true);
--    }
-+    writer->writeRecovery(newSocketFd, remoteHeader.sequencenumber());
- 
-     et::CatchupBuffer catchupBuffer =
-         socketHandler->readProto<et::CatchupBuffer>(newSocketFd, true);
- 
++    // Reject an expired replay window before reading or allocating peer data.
++    writer->validateRecovery(remoteHeader.sequencenumber());
++    et::CatchupBuffer catchupBuffer;
++    if (readPeerCatchupFirst) {
++      catchupBuffer =
++          socketHandler->readProto<et::CatchupBuffer>(newSocketFd, true);
++      writer->writeRecovery(newSocketFd, remoteHeader.sequencenumber());
++    } else {
++      writer->writeRecovery(newSocketFd, remoteHeader.sequencenumber());
++      catchupBuffer =
++          socketHandler->readProto<et::CatchupBuffer>(newSocketFd, true);
+     }
+
+-    et::CatchupBuffer catchupBuffer =
+-        socketHandler->readProto<et::CatchupBuffer>(newSocketFd, true);
+-
      socketFd = newSocketFd;
 -    vector<string> recoveredMessages(catchupBuffer.buffer().begin(),
 -                                     catchupBuffer.buffer().end());
@@ -310,6 +357,19 @@ index d95674388..7da958383 100644
      writer->revive(socketFd);
      LOG(INFO) << "Finished recovering with socket fd: " << socketFd;
      return true;
+diff --git a/src/base/Connection.hpp b/src/base/Connection.hpp
+index 70b9dd229..1bf7db6ea 100644
+--- a/src/base/Connection.hpp
++++ b/src/base/Connection.hpp
+@@ -104,7 +104,7 @@ class Connection {
+    * @return true if recovery succeeds and the new socket is owned by this
+    * object.
+    */
+-  bool recover(int newSocketFd);
++  bool recover(int newSocketFd, bool readPeerCatchupFirst = false);
+
+   /** @brief Socket API used by all derived connection types. */
+   shared_ptr<SocketHandler> socketHandler;
 diff --git a/src/base/Packet.hpp b/src/base/Packet.hpp
 index 0af7d8ef8..5013403c2 100644
 --- a/src/base/Packet.hpp
@@ -317,7 +377,7 @@ index 0af7d8ef8..5013403c2 100644
 @@ -79,6 +79,14 @@ class Packet {
      return s;
    }
- 
+
 +  /** @brief Writes the wire bytes without copying the payload into a string. */
 +  template <typename Write>
 +  void writeSerialized(Write&& write) const {
@@ -343,13 +403,13 @@ index 9c4d420f0..bd9f560f4 100644
      if (writer) {
        writer->revive(oldSocketFd);
 diff --git a/test/unit_tests/BackedIOTest.cpp b/test/unit_tests/BackedIOTest.cpp
-index 5c6abecfe..02ae369bd 100644
+index 5c6abecfe..9ae153607 100644
 --- a/test/unit_tests/BackedIOTest.cpp
 +++ b/test/unit_tests/BackedIOTest.cpp
 @@ -188,6 +188,76 @@ TEST_CASE("BackedReader revive seeds local buffer", "[BackedIO]") {
    REQUIRE(reader.getSequenceNumber() == 1);
  }
- 
+
 +TEST_CASE("BackedReader reads a large fragmented packet in bounded chunks",
 +          "[BackedIO][RecoveryMemory]") {
 +  class ReadSizeHandler : public InMemorySocketHandler {
@@ -426,16 +486,16 @@ index 5c6abecfe..02ae369bd 100644
 @@ -395,7 +465,7 @@ TEST_CASE("Connection severs instead of dying on unexpected read errno",
    }
  }
- 
+
 -TEST_CASE("BackedWriter trims old data when connected and buffer exceeds 64MB",
 +TEST_CASE("BackedWriter trims old data when connected and buffer exceeds limit",
            "[BackedIO]") {
    auto handler = make_shared<InMemorySocketHandler>();
    const int fd = handler->createChannel();
 @@ -404,22 +474,23 @@ TEST_CASE("BackedWriter trims old data when connected and buffer exceeds 64MB",
- 
+
    auto writer = make_shared<BackedWriter>(handler, crypto, fd);
- 
+
 -  // Write 70MB of data while connected (exceeds 64MB MAX_BACKUP_BYTES)
 +  // Exceed the configured replay limit, including custom smaller builds.
 +  const int bufferMiB = BackedWriter::MAX_BACKUP_BYTES / (1024 * 1024);
@@ -447,15 +507,15 @@ index 5c6abecfe..02ae369bd 100644
      auto result = writer->write(p);
      REQUIRE(result == BackedWriterWriteState::SUCCESS);
    }
- 
+
    // Verify sequence number reflects all writes
 -  REQUIRE(writer->getSequenceNumber() == 70);
 +  REQUIRE(writer->getSequenceNumber() == writes);
- 
+
 -  // Disconnect and try to recover - should only have ~64MB worth of messages
 +  // Only the configured replay window should remain.
    writer->invalidateSocket();
- 
+
 -  // Request recovery of all 70 messages - should throw because old ones were
 -  // trimmed
 +  // Older messages have been trimmed, so a replay from the beginning must fail.
@@ -464,27 +524,70 @@ index 5c6abecfe..02ae369bd 100644
      writer->recover(0);  // Try to recover from sequence 0
 @@ -430,8 +501,9 @@ TEST_CASE("BackedWriter trims old data when connected and buffer exceeds 64MB",
    REQUIRE(threw);
- 
+
    // Recovery from a recent sequence should work
 -  auto recovered = writer->recover(writer->getSequenceNumber() - 10);
 -  REQUIRE(recovered.size() == 10);
 +  const int recent = std::min(10, bufferMiB - 1);
 +  auto recovered = writer->recover(writer->getSequenceNumber() - recent);
 +  REQUIRE(recovered.size() == recent);
- 
+
    handler->close(fd);
  }
+@@ -469,3 +541,29 @@ TEST_CASE("SocketHandler readProto enforces max length before allocating",
+   handler.close(fds[0]);
+   handler.close(fds[1]);
+ }
++
++TEST_CASE("Recovery window covers a delayed 12 MiB peer",
++          "[BackedIO][ReplayWindow]") {
++  class DiscardWrites : public InMemorySocketHandler {
++   public:
++    ssize_t write(int, const void*, size_t count) override { return count; }
++  };
++  auto handler = make_shared<DiscardWrites>();
++  int fd = handler->createChannel();
++  BackedWriter writer(
++      handler,
++      make_shared<CryptoHandler>("12345678901234567890123456789012", 0), fd);
++  const string payload(1024 * 1024, 'x');
++  for (int i = 0; i < 12; ++i)
++    REQUIRE(writer.write(Packet(i, payload)) ==
++            BackedWriterWriteState::SUCCESS);
++  writer.invalidateSocket();
++  bool recovered = false;
++  try {
++    recovered = writer.recover(0).size() == 12;
++  } catch (const std::runtime_error&) {
++  }
++  std::cout << "REPLAY_WINDOW_MIB=" << ET_RECOVERY_BUFFER_MIB
++            << " LAG_MIB=12 RECOVERED=" << recovered << std::endl;
++  CHECK(recovered == (BackedWriter::MAX_BACKUP_BYTES > 12 * 1024 * 1024));
++}
 diff --git a/test/unit_tests/ClientConnectionTest.cpp b/test/unit_tests/ClientConnectionTest.cpp
-index 2ea863aa3..521f4787a 100644
+index 2ea863aa3..5741d8f8a 100644
 --- a/test/unit_tests/ClientConnectionTest.cpp
 +++ b/test/unit_tests/ClientConnectionTest.cpp
-@@ -95,6 +95,69 @@ class RecoverableConnection : public Connection {
- 
+@@ -95,6 +95,82 @@ class RecoverableConnection : public Connection {
+
    void closeSocketAndMaybeReconnect() override { closeSocket(); }
  };
 +
 +// Script the peer's sequence/catchup response while recording the real
 +// Connection::recover write path. Large writes expose a whole-backlog copy.
++class ReplayOrderClient : public ClientConnection {
++ public:
++  ReplayOrderClient(shared_ptr<SocketHandler> sh, int fd, const string& key)
++      : ClientConnection(sh, SocketEndpoint(), "replay-order", key) {
++    socketFd = fd;
++    reader =
++        make_shared<BackedReader>(sh, make_shared<CryptoHandler>(key, 0), fd);
++    writer =
++        make_shared<BackedWriter>(sh, make_shared<CryptoHandler>(key, 0), fd);
++  }
++  bool recoverPublic(int fd) { return recover(fd); }
++};
++
 +class RecoveryStreamHandler : public SocketHandler {
 + public:
 +  string incoming;
@@ -547,8 +650,8 @@ index 2ea863aa3..521f4787a 100644
 +};
  }  // namespace
  }  // namespace et
- 
-@@ -364,3 +427,77 @@ TEST_CASE("Connection recover exchanges sequence and catchup", "[Connection]") {
+
+@@ -364,3 +440,137 @@ TEST_CASE("Connection recover exchanges sequence and catchup", "[Connection]") {
    handler->close(reconnect[0]);
    remote.join();
  }
@@ -625,4 +728,64 @@ index 2ea863aa3..521f4787a 100644
 +    CHECK(received.getPayload() == string(1024, 'x'));
 +  }
 +  conn.shutdown();
++}
++
++TEST_CASE("Client recovery drains peer catchup before sending its own",
++          "[Connection]") {
++  auto handler = make_shared<SocketPairHandler>();
++  int live[2];
++  REQUIRE(createTestSocketPair(live) == 0);
++
++  const string key = "zyxwvutsrqponmlkjihgfedcba987654";
++  ReplayOrderClient conn(handler, live[0], key);
++
++  conn.write(Packet(1, "first"));
++  conn.write(Packet(2, "second"));
++  conn.closeSocket();
++
++  int reconnect[2];
++  REQUIRE(createTestSocketPair(reconnect) == 0);
++
++  // The peer follows the server's order: it sends its catchup, then reads. It
++  // only records what it sees; the assertions run on the test thread.
++  int64_t peerSawSequence = -1;
++  bool catchupArrivedEarly = true;
++  int peerCatchupSize = -1;
++  std::exception_ptr peerError;
++  std::thread remote([&]() {
++    try {
++      auto seqHeader = handler->readProto<SequenceHeader>(reconnect[1], true);
++      peerSawSequence = seqHeader.sequencenumber();
++
++      SequenceHeader seqResponse;
++      seqResponse.set_sequencenumber(1);
++      handler->writeProto(reconnect[1], seqResponse, true);
++
++      // A connection that reads first sends nothing until our catchup
++      // arrives. A connection that sends first writes its small catchup as
++      // soon as it has our header, well inside this window.
++      std::this_thread::sleep_for(std::chrono::milliseconds(200));
++      catchupArrivedEarly = handler->hasData(reconnect[1]);
++
++      CatchupBuffer back;
++      handler->writeProto(reconnect[1], back, true);
++      auto catchup = handler->readProto<CatchupBuffer>(reconnect[1], true);
++      peerCatchupSize = catchup.buffer_size();
++    } catch (...) {
++      peerError = std::current_exception();
++    }
++    handler->close(reconnect[1]);
++  });
++
++  bool recovered = conn.recoverPublic(reconnect[0]);
++  remote.join();
++  conn.shutdown();
++  handler->close(live[1]);
++  if (peerError) {
++    std::rethrow_exception(peerError);
++  }
++  REQUIRE(recovered);
++  REQUIRE(peerSawSequence == 0);
++  REQUIRE_FALSE(catchupArrivedEarly);
++  REQUIRE(peerCatchupSize == 1);
 +}

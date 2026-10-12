@@ -123,7 +123,9 @@ An optional custom ET recovery-buffer patch outside ezet can lower the bound to 
 
 ### ET reconnect memory patch
 
-[`tools/et-reconnect-memory.patch`](tools/et-reconnect-memory.patch) streams recovery output, preserves partial packets when recovery fails, and validates packet lengths before reading in bounded chunks. It preserves the existing wire protocol and the upstream 64 MiB replay window by default. A smaller window is optional; connections that exceed it can still fail to recover.
+[`tools/et-reconnect-memory.patch`](tools/et-reconnect-memory.patch) streams recovery output, preserves partial packets when recovery fails, and validates packet lengths before reading in bounded chunks. The client drains the server's catchup before sending its own, avoiding a deadlock when both directions have large backlogs. The wire protocol remains compatible.
+
+Keep the upstream 64 MiB replay window by default. In a replay test, an 8 MiB window could not recover 12 MiB of missed output, while 64 MiB succeeded. Reducing the buffer is not a general memory fix. Connections outside the replay window can still fail, and this patch does not establish that all long-running OOMs are resolved. The bidirectional recovery fix requires updating the client; reopen existing connections after updating the managed installation.
 
 With Git, a compiler, CMake, protobuf, OpenSSL and libsodium development packages installed, opt into building and selecting a tested, ezet-managed ET client. Homebrew's prefix and the SDK are detected on macOS. Repeat the install command to update:
 
@@ -133,7 +135,7 @@ ezet --doctor       # inspect the selected client path
 ezet --rollback-et  # restore the previous managed client
 ```
 
-Regular installs do not build or replace ET. Managed releases live under `${XDG_DATA_HOME:-$HOME/.local/share}/ezet`, configurable with `EZET_DATA_DIR`. Selection priority is `EZET_ET_BIN`, the managed client, then `et` on PATH. `EZET_ET_BIN=et ezet` selects the system client. Package-manager files and the ordinary `et` command are unchanged; running connections keep their original binary. Managed releases are retained. Set `EZET_ET_RECOVERY_BUFFER_MIB=8` to opt into a smaller buffer or `EZET_REF` to pin the ezet tools to a tag or commit. The installer reports if another ezet takes precedence on PATH.
+Regular installs do not build or replace ET. Managed releases live under `${XDG_DATA_HOME:-$HOME/.local/share}/ezet`, configurable with `EZET_DATA_DIR`. Selection priority is `EZET_ET_BIN`, the managed client, then `et` on PATH. `EZET_ET_BIN=et ezet` selects the system client. Package-manager files and the ordinary `et` command are unchanged; running connections keep their original binary. Managed releases are retained. `EZET_ET_RECOVERY_BUFFER_MIB` changes the window, but keeping the default 64 MiB is recommended. Use `EZET_REF` to pin the ezet tools to a tag or commit. The installer reports if another ezet takes precedence on PATH.
 
 From a checkout, build the pinned ET source and its required submodules directly, or install server binaries separately:
 
