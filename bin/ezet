@@ -15,7 +15,7 @@
 # EZET_DRYRUN=1 prints the target instead of connecting (for tests).
 set -euo pipefail
 
-EZET_VERSION="1.1.0"
+EZET_VERSION="1.1.1"
 
 # ── Dedicated SSH config module ──────────────────────────────────
 # Public interface: config_ensure, config_include_present
@@ -33,16 +33,23 @@ if [ "$EZET_SSH_CONNECT_TIMEOUT" -lt 1 ] || [ "$EZET_SSH_CONNECT_TIMEOUT" -gt 60
 fi
 SSH_CONNECT_OPTIONS=(-o "ConnectTimeout=$EZET_SSH_CONNECT_TIMEOUT" -o ConnectionAttempts=1)
 
-# SSH connection multiplexing: the session query, refresh, rename and SSH transport
-# all reuse one master connection, which removes repeated auth and handshake delay.
-# It does not affect the et transport (et takes no ssh options).
+# SSH connection multiplexing: the session query, refresh, rename, the ET restart
+# check and the SSH transport all reuse one master connection, which removes the
+# repeated handshake (several round trips, slow on a jittery network). The master
+# stays up for EZET_SSH_PERSIST (30m) so returning to the session list after a
+# long session still finds it. It does not affect the et transport (et takes no
+# ssh options).
 # Call this after option parsing but before connecting, so --help/--doctor stay
-# side-effect free. It disables itself on OpenSSH older than 6.7 (no %C) or when the
-# socket path would approach the platform limit.
+# side-effect free. It disables itself on OpenSSH older than 6.8 (no ssh -G) or
+# when the socket path would not fit the platform limit.
 EZET_CONTROL_DIR="${EZET_CONTROL_DIR:-$HOME/.ssh/ezet-cm}"
+EZET_SSH_PERSIST="${EZET_SSH_PERSIST:-30m}"
+persist_re='^(yes|[0-9]+[smhdw]?)$'
+[[ "$EZET_SSH_PERSIST" =~ $persist_re ]] || EZET_SSH_PERSIST=30m
+SSH_MUX_ON=0
 setup_multiplexing() {
   [ -n "${EZET_NO_MULTIPLEX:-}" ] && return 0
-  local ver major minor
+  local ver major minor socket
   ver=$(ssh -V 2>&1 || true)
   case "$ver" in
     OpenSSH_[0-9]*)
@@ -55,14 +62,47 @@ setup_multiplexing() {
       fi ;;
     *) return 0 ;;
   esac
-  # Unix socket path limit (macOS ~104, Linux ~108). Besides the 64 characters of
-  # the %C expansion, OpenSSH first creates a temporary listener
-  # (<path>.XXXXXXXXXXXXXXXX), so leave generous room.
-  [ "$(( ${#EZET_CONTROL_DIR} + 82 ))" -ge 100 ] && return 0
+  # Unix socket paths are limited (macOS 104 bytes, Linux 108), and OpenSSH first
+  # binds a temporary listener at <path>.XXXXXXXXXXXXXXXX. Measure the expanded
+  # path instead of assuming how long %C is.
+  socket=$(ssh -G -o "ControlPath=$EZET_CONTROL_DIR/%C" ezet-mux-probe 2>/dev/null \
+    | awk '$1 == "controlpath" { print $2; exit }')
+  [ -n "$socket" ] && [ "$(( ${#socket} + 17 ))" -lt 104 ] || return 0
   mkdir -p "$EZET_CONTROL_DIR" 2>/dev/null || return 0
   chmod 700 "$EZET_CONTROL_DIR" 2>/dev/null || true
   [ -d "$EZET_CONTROL_DIR" ] && [ -w "$EZET_CONTROL_DIR" ] || return 0
-  SSH_CONNECT_OPTIONS+=(-o ControlMaster=auto -o "ControlPath=$EZET_CONTROL_DIR/%C" -o ControlPersist=30s)
+  # Keepalives let a master whose connection died give up instead of hanging.
+  SSH_CONNECT_OPTIONS+=(-o ControlMaster=auto -o "ControlPath=$EZET_CONTROL_DIR/%C"
+    -o "ControlPersist=$EZET_SSH_PERSIST" -o ServerAliveInterval=15 -o ServerAliveCountMax=2)
+  SSH_MUX_ON=1
+}
+
+# Seconds since the epoch when this machine last woke from sleep, or nothing
+# where that is unknown (Linux).
+last_wake_time() {
+  sysctl -n kern.waketime 2>/dev/null | sed -n 's/^{ sec = \([0-9][0-9]*\),.*/\1/p'
+}
+
+# A master opened before the machine last went to sleep may hold a connection
+# that died meanwhile; a request through it would wait for the keepalives to
+# give up. Close such a master so the next ssh opens a fresh one.
+drop_stale_ssh_master() {
+  [ "$SSH_MUX_ON" -eq 1 ] || return 0
+  local wake socket born
+  wake=$(last_wake_time)
+  [ -n "$wake" ] || return 0
+  socket=$(ssh -G "${SSH_CONNECT_OPTIONS[@]}" "$host" 2>/dev/null | awk '$1 == "controlpath" { print $2; exit }')
+  [ -n "$socket" ] && [ -S "$socket" ] || return 0
+  born=$(date -r "$socket" +%s 2>/dev/null) || return 0
+  [ "$born" -lt "$wake" ] || return 0
+  ssh -o "ControlPath=$socket" -O exit "$host" >/dev/null 2>&1 || rm -f "$socket"
+}
+
+# Every ssh to the selected host goes through here.
+remote_ssh() {
+  drop_stale_ssh_master
+  # shellcheck disable=SC2029  # callers pass the remote command on purpose
+  ssh "${SSH_CONNECT_OPTIONS[@]}" "$@"
 }
 
 config_include_present() {
@@ -467,7 +507,7 @@ remote_etserver_state() {
     up=$(ps -o etimes= -p "$pid" 2>/dev/null | tr -d ' ')
     case "$up" in ''|*[!0-9]*) echo unknown ;; *) echo "up $up" ;; esac
 ETSERVER_PROBE
-  printf '%s' "$probe" | ssh "${SSH_CONNECT_OPTIONS[@]}" -o BatchMode=yes "$host" sh -s 2>/dev/null
+  printf '%s' "$probe" | remote_ssh -o BatchMode=yes "$host" sh -s 2>/dev/null
 }
 
 # Decides whether a connection that just ended was dropped rather than closed
@@ -536,7 +576,7 @@ attach_session() {
       run_et ${ET_OPTIONS[@]+"${ET_OPTIONS[@]}"} "$host" -c "$tmux_command" || status=$?
     else
       # Keepalives turn a connection that died during sleep into exit 255.
-      ssh "${SSH_CONNECT_OPTIONS[@]}" -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \
+      remote_ssh -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \
         -t "$host" "$tmux_command" || status=$?
     fi
     lasted=$(( $(date +%s) - started ))
@@ -608,7 +648,7 @@ connect_plain_ssh() {
   fi
   show_connect_status 'SSH SHELL' "$host" "up to ${EZET_SSH_CONNECT_TIMEOUT}s · Ctrl-C to cancel"
   TERMINAL_SANITIZE_NEEDED=1
-  ssh "${SSH_CONNECT_OPTIONS[@]}" -t "$host"
+  remote_ssh -t "$host"
 }
 
 # Resolve the real connection details of a host from the SSH config.
@@ -2362,7 +2402,7 @@ fetch_sessions() {
     printf "__DT_NOW__=%s\n" "$(date +%s)"
     "$tmux_bin" -L "$tmux_socket" list-sessions -F "__DT_SESSION__|#{session_name}|#{session_windows}|#{?session_attached,attached,}|#{session_activity}|#{session_created}|#{pane_current_command}|#{pane_current_path}" 2>/dev/null || true
 FETCH_SCRIPT
-  if ! list_raw=$(printf '%s' "$fetch_script" | ssh "${SSH_CONNECT_OPTIONS[@]}" "$host" sh -s 2>&1); then
+  if ! list_raw=$(printf '%s' "$fetch_script" | remote_ssh "$host" sh -s 2>&1); then
     # SSH itself failed. The underlying cause comes from the ssh diagnostic (its
     # wording is fixed English).
     case "$list_raw" in
@@ -2785,7 +2825,7 @@ if is_tty; then
           tmux_bin="${REMOTE_TMUX:-}"
           if ! valid_remote_tmux_path "$tmux_bin"; then
             session_status err 'Rename failed (remote tmux path unverified).'
-          elif ssh -n "${SSH_CONNECT_OPTIONS[@]}" "$host" "$(remote_tmux_command) rename-session -t '$old' '$nn'" 2>/dev/null; then
+          elif remote_ssh -n "$host" "$(remote_tmux_command) rename-session -t '$old' '$nn'" 2>/dev/null; then
             session_status ok "Renamed: $old -> $nn"
             rename_ok=1
           else
