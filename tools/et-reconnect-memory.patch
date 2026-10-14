@@ -402,6 +402,64 @@ index 9c4d420f0..bd9f560f4 100644
      }
      if (writer) {
        writer->revive(oldSocketFd);
+diff --git a/src/base/TmuxCcFilter.hpp b/src/base/TmuxCcFilter.hpp
+index 8fa3cd995..1ac3829fa 100644
+--- a/src/base/TmuxCcFilter.hpp
++++ b/src/base/TmuxCcFilter.hpp
+@@ -75,32 +75,34 @@ inline bool tmuxCcStartsAtLineBoundary(const string& data) {
+ inline TmuxCcFilterResult filterTmuxCc(const string& data,
+                                        bool inControlMode = false,
+                                        bool discarding = true) {
+-  if (!data.empty() && inControlMode && !tmuxCcStartsAtLineBoundary(data)) {
++  TmuxCcFilterResult result;
++  size_t lineStart = 0;
++  if (inControlMode) {
+     // A %output / %extended-output line was already partly sent. Cutting it
+     // leaves a non-`%` fragment as the next line; iTerm2 treats that as an
+-    // unrecognized command and tears down tmux mode. Finish this line, then
++    // unrecognized command and tears down tmux mode. Finish this line (and
++    // every following line until one starts at a message boundary), then
+     // filter complete messages as usual.
+-    size_t newline = data.find('\n');
+-    if (newline == string::npos) {
+-      TmuxCcFilterResult result;
+-      result.kept = data;
+-      return result;
++    //
++    // Walk forward in place. Recursing on data.substr() kept a copy of every
++    // remaining suffix alive at once, so memory grew with the square of the
++    // line count: plain TTY output misread as control mode (any line that
++    // starts with '%') could take a few hundred KB of buffered output past a
++    // 1GiB memory limit while the client was away.
++    while (lineStart < data.size() && data[lineStart] != '%' &&
++           data[lineStart] != '\n') {
++      size_t newline = data.find('\n', lineStart);
++      if (newline == string::npos) {
++        result.kept.append(data, lineStart, string::npos);
++        return result;
++      }
++      result.kept.append(data, lineStart, newline + 1 - lineStart);
++      lineStart = newline + 1;
+     }
+-    TmuxCcFilterResult rest =
+-        filterTmuxCc(data.substr(newline + 1), true, discarding);
+-    TmuxCcFilterResult result;
+-    result.kept.assign(data, 0, newline + 1);
+-    result.kept += rest.kept;
+-    result.droppable = rest.droppable;
+-    result.dropped = rest.dropped;
+-    result.skipUntilNewline = rest.skipUntilNewline;
+-    return result;
+   }
+
+-  TmuxCcFilterResult result;
+   bool inBeginBlock = false;
+-  size_t lineStart = 0;
+-  for (size_t i = 0; i < data.size(); ++i) {
++  for (size_t i = lineStart; i < data.size(); ++i) {
+     if (data[i] != '\n') {
+       continue;
+     }
 diff --git a/test/unit_tests/BackedIOTest.cpp b/test/unit_tests/BackedIOTest.cpp
 index 5c6abecfe..9ae153607 100644
 --- a/test/unit_tests/BackedIOTest.cpp
@@ -789,3 +847,56 @@ index 2ea863aa3..5741d8f8a 100644
 +  REQUIRE_FALSE(catchupArrivedEarly);
 +  REQUIRE(peerCatchupSize == 1);
 +}
+diff --git a/test/unit_tests/TmuxCcFilterTest.cpp b/test/unit_tests/TmuxCcFilterTest.cpp
+index fd2e360c4..e0e59937b 100644
+--- a/test/unit_tests/TmuxCcFilterTest.cpp
++++ b/test/unit_tests/TmuxCcFilterTest.cpp
+@@ -92,6 +92,48 @@ TEST_CASE("filterTmuxCc TTY incomplete still does not skip", "[TmuxCcFilter]") {
+   REQUIRE_FALSE(result.skipUntilNewline);
+ }
+
++TEST_CASE("filterTmuxCc keeps mid-line lines up to a message boundary",
++          "[TmuxCcFilter]") {
++  const string rest =
++      "end of a cut line\n"
++      "next tty line\n"
++      "%layout-change @1 vis\n"
++      "%output %0 x\n"
++      "trailing";
++  TmuxCcFilterResult result = filterTmuxCc(rest, true);
++  REQUIRE(result.kept ==
++          "end of a cut line\n"
++          "next tty line\n"
++          "%layout-change @1 vis\n");
++  REQUIRE(result.droppable == "%output %0 x\ntrailing");
++  REQUIRE(result.dropped == result.droppable.size());
++  REQUIRE_FALSE(result.skipUntilNewline);
++}
++
++// Plain TTY output is misread as control mode once any line starts with '%'.
++// A disconnected client lets megabytes of it pile up, and the filter used to
++// recurse once per line on a fresh copy of the remainder: memory grew with the
++// square of the line count and the server hit its memory limit. This input
++// needs hundreds of GB that way; walking it in place stays linear.
++TEST_CASE("filterTmuxCc stays linear on a large mid-line TTY backlog",
++          "[TmuxCcFilter]") {
++  string tty;
++  for (int i = 0; i < 200000; ++i) {
++    tty += "building step " + std::to_string(i) + " 47%\r\n";
++  }
++  TmuxCcFilterResult kept = filterTmuxCc(tty, true, false);
++  REQUIRE(kept.kept == tty);
++  REQUIRE(kept.dropped == 0);
++
++  string control = "cut\n";
++  for (int i = 0; i < 200000; ++i) {
++    control += "%output %0 line\n";
++  }
++  TmuxCcFilterResult dropped = filterTmuxCc(control, true);
++  REQUIRE(dropped.kept == "cut\n");
++  REQUIRE(dropped.dropped == control.size() - 4);
++}
++
+ // A GUI attached with `tmux -CC` (e.g. iTerm2) sends keystrokes as
+ // `send-keys` control-mode commands rather than raw bytes, so Ctrl+C never
+ // appears as byte 0x03 on the wire. These cover the command forms that must

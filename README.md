@@ -5,7 +5,7 @@ English · [한국어](README.ko.md)
 An interactive CLI for picking SSH · [Eternal Terminal](https://eternalterminal.dev/) · tmux hosts and sessions. Pure Bash, and it falls back to plain SSH whenever ET is unavailable.
 
 - **tmux session management** — list, create and rename remote sessions, then attach right away.
-- **Auto-reconnect** — prefers Eternal Terminal (ET), so sessions survive a closed laptop lid or a network change.
+- **Auto-reconnect** — prefers Eternal Terminal (ET), so sessions survive a closed laptop lid or a network change. If the ET server itself restarts (a memory limit, an upgrade, a reboot) or an SSH connection drops, ezet attaches the same tmux session again; a detach or an exited session is left alone. `EZET_AUTO_RECONNECT=0` turns this off.
 - **Opt-in session close** — ezet passes `--close-on-hangup` only for an explicitly enabled Host and a client that supports it. The request may not reach the server depending on the connection state, and requires matching ET components.
 - **SSH fallback** — hosts without ET, or without a usable tmux, are reached over plain SSH.
 
