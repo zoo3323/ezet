@@ -66,7 +66,7 @@ setup_multiplexing() {
   # binds a temporary listener at <path>.XXXXXXXXXXXXXXXX. Measure the expanded
   # path instead of assuming how long %C is.
   socket=$(ssh -G -o "ControlPath=$EZET_CONTROL_DIR/%C" ezet-mux-probe 2>/dev/null \
-    | awk '$1 == "controlpath" { print $2; exit }')
+    | awk '$1 == "controlpath" { path = $2 } END { print path }') || socket=""
   [ -n "$socket" ] && [ "$(( ${#socket} + 17 ))" -lt 104 ] || return 0
   mkdir -p "$EZET_CONTROL_DIR" 2>/dev/null || return 0
   chmod 700 "$EZET_CONTROL_DIR" 2>/dev/null || true
@@ -80,7 +80,7 @@ setup_multiplexing() {
 # Seconds since the epoch when this machine last woke from sleep, or nothing
 # where that is unknown (Linux).
 last_wake_time() {
-  sysctl -n kern.waketime 2>/dev/null | sed -n 's/^{ sec = \([0-9][0-9]*\),.*/\1/p'
+  { sysctl -n kern.waketime 2>/dev/null || true; } | sed -n 's/^{ sec = \([0-9][0-9]*\),.*/\1/p'
 }
 
 # A master opened before the machine last went to sleep may hold a connection
@@ -91,7 +91,8 @@ drop_stale_ssh_master() {
   local wake socket born
   wake=$(last_wake_time)
   [ -n "$wake" ] || return 0
-  socket=$(ssh -G "${SSH_CONNECT_OPTIONS[@]}" "$host" 2>/dev/null | awk '$1 == "controlpath" { print $2; exit }')
+  socket=$(ssh -G "${SSH_CONNECT_OPTIONS[@]}" "$host" 2>/dev/null \
+    | awk '$1 == "controlpath" { path = $2 } END { print path }') || socket=""
   [ -n "$socket" ] && [ -S "$socket" ] || return 0
   born=$(date -r "$socket" +%s 2>/dev/null) || return 0
   [ "$born" -lt "$wake" ] || return 0

@@ -101,4 +101,19 @@ EZET_CONTROL_DIR="$tmp/cm" bash -c '
   remote_ssh -n box true' _ "$section" "$remote"
 case "$(cat "$SSH_LOG")" in "-o ConnectTimeout=5 -o ControlMaster=auto"*"-n box true") ;; *) fail 'remote_ssh options' "$(cat "$SSH_LOG")" ;; esac
 
+# Where kern.waketime does not exist (Linux), sysctl fails; under errexit and
+# pipefail that must not stop ezet.
+mkdir -p "$tmp/nosysctl"
+printf '#!/bin/sh\nexit 255\n' > "$tmp/nosysctl/sysctl"
+chmod +x "$tmp/nosysctl/sysctl"
+: > "$SSH_LOG"
+PATH="$tmp/nosysctl:$PATH" EZET_CONTROL_DIR="$tmp/cm" bash -c '
+  set -euo pipefail
+  SSH_CONNECT_OPTIONS=(-o ConnectTimeout=5)
+  host=box
+  eval "$1"; eval "$2"
+  setup_multiplexing
+  remote_ssh -n box true' _ "$section" "$remote" || fail 'remote_ssh without kern.waketime'
+grep -q -- "-n box true" "$SSH_LOG" || fail 'remote_ssh without kern.waketime still runs ssh' "$(cat "$SSH_LOG")"
+
 printf 'ssh mux tests passed\n'
