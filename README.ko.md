@@ -7,6 +7,7 @@ SSH·[Eternal Terminal](https://eternalterminal.dev/)·tmux 호스트와 세션�
 - **tmux 세션 관리** — 원격 세션을 조회·생성·수정하고 바로 attach합니다.
 - **자동 재연결** — Eternal Terminal(ET)을 우선 사용해 노트북을 닫거나 네트워크가 바뀌어도 세션을 유지·재연결합니다. ET 서버 자체가 다시 시작되거나(메모리 한도, 업그레이드, 재부팅) SSH 연결이 끊겨도 같은 tmux 세션에 다시 붙습니다. 직접 detach 하거나 세션이 끝난 경우에는 그대로 둡니다. `EZET_AUTO_RECONNECT=0`으로 끌 수 있습니다.
 - **선택적 세션 종료** — ezet은 명시적으로 활성화한 Host에서 지원되는 ET 클라이언트에만 `--close-on-hangup`을 전달합니다. 연결 상태에 따라 종료 요청이 전달되지 않을 수 있고, ET 구성요소 버전도 맞아야 합니다.
+- **빠른 다시 불러오기** — 세션 목록, 이름 변경, ET 재시작 확인, SSH 접속이 호스트마다 SSH 연결 하나를 함께 쓰고, 30분 동안 유지합니다(`EZET_SSH_PERSIST`, 예: `10m`, `EZET_NO_MULTIPLEX=1`로 끔). 맥이 잠들기 전에 연 연결은 끊긴 채 기다리지 않도록 닫고 새로 엽니다.
 - **SSH 폴백** — ET를 설치하지 않았거나 tmux를 사용할 수 없는 호스트는 일반 SSH로 접속합니다.
 
 [![test](https://github.com/zoo3323/ezet/actions/workflows/test.yml/badge.svg)](https://github.com/zoo3323/ezet/actions/workflows/test.yml)
