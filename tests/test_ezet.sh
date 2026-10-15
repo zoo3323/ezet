@@ -240,8 +240,10 @@ fi
 expect <<'EXPECT'
 set timeout 3
 spawn env HOME=$env(EZET_TEST_HOME) NO_COLOR=1 $env(EZET_TEST_BIN)
-expect "SSH HOSTS*"
-expect "Search  host name or address*"
+# A trailing * would swallow the rest of the frame (the header below with it)
+# whenever the frame arrives in one read, so these stop at the match.
+expect "SSH HOSTS"
+expect "Search  host name or address"
 expect {
   -re {HOST +USER +ADDRESS +VIA} {}
   timeout { exit 80 }
@@ -434,7 +436,7 @@ expect <<'EXPECT'
 set timeout 5
 spawn env HOME=$env(EZET_TEST_HOME) PATH=$env(EZET_FAKE_PATH) NO_COLOR=1 EZET_FAKE_SSH_MODE=sessions EZET_FAKE_SSH_LOG=$env(EZET_FAKE_SSH_LOG) $env(EZET_TEST_BIN) host-b
 stty columns 100 rows 40 < $spawn_out(slave,name)
-expect "Fetched tmux sessions*"
+expect "Fetched tmux sessions"
 expect {
   -re {IDLE +AGE +CMD +DIR} {}
   timeout { exit 81 }
@@ -492,7 +494,7 @@ expect -re {› Search  bravo}
 send "\033\[B"
 expect -re {› bravo}
 send "e"
-expect "RENAME SESSION  bravo*"
+expect "RENAME SESSION  bravo"
 expect {
   -re {CURRENT +bravo} { }
   timeout { exit 25 }
@@ -572,7 +574,7 @@ printf '' > "$fake_ssh_log"
 expect <<'EXPECT'
 set timeout 5
 spawn env HOME=$env(EZET_TEST_HOME) PATH=$env(EZET_FAKE_PATH) NO_COLOR=1 EZET_FAKE_SSH_MODE=windows EZET_FAKE_SSH_LOG=$env(EZET_FAKE_SSH_LOG) $env(EZET_TEST_BIN) host-b
-expect "Cannot fetch tmux sessions*"
+expect "Cannot fetch tmux sessions"
 expect {
   "SSH Direct*" {}
   timeout { exit 110 }
