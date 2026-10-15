@@ -15,7 +15,7 @@
 # EZET_DRYRUN=1 prints the target instead of connecting (for tests).
 set -euo pipefail
 
-EZET_VERSION="1.1.2"
+EZET_VERSION="1.1.3"
 
 # ── Dedicated SSH config module ──────────────────────────────────
 # Public interface: config_ensure, config_include_present
@@ -342,7 +342,13 @@ et_client_options() {
 }
 
 doctor_file_mode() {
-  stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1" 2>/dev/null || printf '?'
+  local mode
+  # GNU stat first. Given BSD's `-f '%Lp'`, GNU stat reads -f as "file system"
+  # and prints that report before failing on the format word, and the report
+  # ended up in the mode; BSD stat rejects -c without printing anything.
+  mode=$(stat -c '%a' "$1" 2>/dev/null) || mode=$(stat -f '%Lp' "$1" 2>/dev/null) || mode=""
+  case "$mode" in ''|*[!0-7]*) mode='?' ;; esac
+  printf '%s' "$mode"
 }
 
 run_doctor() {

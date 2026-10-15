@@ -224,6 +224,22 @@ doctor_old=$(HOME="$tmp" PATH="$tmp/bin:/usr/bin:/bin" EZET_ET_LOG="$tmp/doctor.
   "$ROOT/bin/ezet" --doctor 2>&1 || true)
 printf '%s\n' "$doctor_old" | grep -q 'et client lacks --close-on-hangup'
 
+# Modes are read with GNU stat first: handed BSD's `-f '%Lp'`, GNU stat printed
+# a file system report into the mode and the doctor warned about a mode of 600.
+mode_home="$tmp/modes"
+mkdir -p "$mode_home/.ssh/config.d"
+printf 'Include %s/.ssh/config.d/ezet\n' "$mode_home" > "$mode_home/.ssh/config"
+: > "$mode_home/.ssh/config.d/ezet"
+chmod 600 "$mode_home/.ssh/config"
+chmod 640 "$mode_home/.ssh/config.d/ezet"
+doctor_modes=$(HOME="$mode_home" PATH="$tmp/bin:/usr/bin:/bin" EZET_ET_LOG="$tmp/doctor.log" \
+  "$ROOT/bin/ezet" --doctor 2>&1 || true)
+if ! printf '%s\n' "$doctor_modes" | grep -qx '  \[ok\]   SSH config mode: 600' ||
+   ! printf '%s\n' "$doctor_modes" | grep -qx '  \[warn\] ezet config mode should be 600 (now: 640)'; then
+  printf 'doctor must report file modes cleanly:\n%s\n' "$doctor_modes" >&2
+  exit 1
+fi
+
 # Editing a connection setting clears the opt-in, while an alias-only rename
 # preserves it. Drive the real form so update_host's boolean reaches its caller.
 edit_tmp="$tmp/edit"
