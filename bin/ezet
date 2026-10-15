@@ -15,7 +15,7 @@
 # EZET_DRYRUN=1 prints the target instead of connecting (for tests).
 set -euo pipefail
 
-EZET_VERSION="1.1.1"
+EZET_VERSION="1.1.2"
 
 # ── Dedicated SSH config module ──────────────────────────────────
 # Public interface: config_ensure, config_include_present
@@ -34,11 +34,10 @@ fi
 SSH_CONNECT_OPTIONS=(-o "ConnectTimeout=$EZET_SSH_CONNECT_TIMEOUT" -o ConnectionAttempts=1)
 
 # SSH connection multiplexing: the session query, refresh, rename, the ET restart
-# check and the SSH transport all reuse one master connection, which removes the
-# repeated handshake (several round trips, slow on a jittery network). The master
-# stays up for EZET_SSH_PERSIST (30m) so returning to the session list after a
-# long session still finds it. It does not affect the et transport (et takes no
-# ssh options).
+# check, the SSH transport and et's own ssh bootstrap all reuse one master
+# connection, which removes the repeated handshake (several round trips, slow on
+# a jittery network). The master stays up for EZET_SSH_PERSIST (30m) so returning
+# to the session list after a long session still finds it.
 # Call this after option parsing but before connecting, so --help/--doctor stay
 # side-effect free. It disables itself on OpenSSH older than 6.8 (no ssh -G) or
 # when the socket path would not fit the platform limit.
@@ -80,23 +79,42 @@ setup_multiplexing() {
 # Seconds since the epoch when this machine last woke from sleep, or nothing
 # where that is unknown (Linux).
 last_wake_time() {
-  { sysctl -n kern.waketime 2>/dev/null || true; } | sed -n 's/^{ sec = \([0-9][0-9]*\),.*/\1/p'
+  local out re='^[{] sec = ([0-9]+),'
+  out=$(sysctl -n kern.waketime 2>/dev/null) || out=""
+  if [[ $out =~ $re ]]; then printf '%s\n' "${BASH_REMATCH[1]}"; fi
+}
+
+# The control socket of the selected host (ssh -G expands %C). Main looks it up
+# once the host is known, so the command substitutions that run remote_ssh
+# inherit it instead of asking ssh again on every call.
+SSH_MUX_SOCKET=""; SSH_MUX_SOCKET_HOST=""
+mux_socket_path() {
+  [ "$SSH_MUX_ON" -eq 1 ] || return 1
+  [ "$SSH_MUX_SOCKET_HOST" = "$host" ] && [ -n "$SSH_MUX_SOCKET" ] && return 0
+  SSH_MUX_SOCKET=$(ssh -G "${SSH_CONNECT_OPTIONS[@]}" "$host" 2>/dev/null \
+    | awk '$1 == "controlpath" { path = $2 } END { print path }') || SSH_MUX_SOCKET=""
+  [ -n "$SSH_MUX_SOCKET" ] || return 1
+  SSH_MUX_SOCKET_HOST="$host"
 }
 
 # A master opened before the machine last went to sleep may hold a connection
 # that died meanwhile; a request through it would wait for the keepalives to
-# give up. Close such a master so the next ssh opens a fresh one.
+# give up. Retire such a master so the next ssh opens a fresh one. `-O stop`
+# rather than `-O exit`: the master removes its socket and takes no new clients
+# but lets running sessions finish, so when several tabs reattach at once, one
+# tab retiring a master another tab has only just opened cannot cut that tab's
+# attach short.
 drop_stale_ssh_master() {
   [ "$SSH_MUX_ON" -eq 1 ] || return 0
   local wake socket born
   wake=$(last_wake_time)
   [ -n "$wake" ] || return 0
-  socket=$(ssh -G "${SSH_CONNECT_OPTIONS[@]}" "$host" 2>/dev/null \
-    | awk '$1 == "controlpath" { path = $2 } END { print path }') || socket=""
-  [ -n "$socket" ] && [ -S "$socket" ] || return 0
+  mux_socket_path || return 0
+  socket="$SSH_MUX_SOCKET"
+  [ -S "$socket" ] || return 0
   born=$(date -r "$socket" +%s 2>/dev/null) || return 0
   [ "$born" -lt "$wake" ] || return 0
-  ssh -o "ControlPath=$socket" -O exit "$host" >/dev/null 2>&1 || rm -f "$socket"
+  ssh -o "ControlPath=$socket" -O stop "$host" >/dev/null 2>&1 || rm -f "$socket"
 }
 
 # Every ssh to the selected host goes through here.
@@ -176,6 +194,7 @@ fi
 # the close packet. It is off by default, opt-in per selected Host block, and the
 # local client capability is cached while options are reset for every host.
 EZET_DATA_DIR="${EZET_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/ezet}"
+EZET_CACHE_DIR="${EZET_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/ezet}"
 ET_CLIENT=""
 resolve_et_client() {
   ET_CLIENT=""
@@ -247,7 +266,7 @@ manage_et_client() (
   printf 'ET client selected: %s\n' "$root/current"
 )
 
-ET_OPTIONS=(); ET_CLIENT_SUPPORT_PROBED=0; ET_CLIENT_SUPPORT=0
+ET_OPTIONS=(); ET_CLIENT_SUPPORT_PROBED=0; ET_CLIENT_SUPPORT=0; ET_SSH_OPTION_SUPPORT=0
 load_host_close_on_hangup() {
   local target="$1" cfg="$EZET_HOSTS_FILE"
   [ -f "$cfg" ] || return 1
@@ -288,18 +307,37 @@ probe_et_client_support() {
     [ "$ET_CLIENT_SUPPORT" -eq 1 ]
     return $?
   fi
-  ET_CLIENT_SUPPORT_PROBED=1; ET_CLIENT_SUPPORT=0
+  ET_CLIENT_SUPPORT_PROBED=1; ET_CLIENT_SUPPORT=0; ET_SSH_OPTION_SUPPORT=0
   if resolve_et_client && help=$(run_et --help 2>&1); then
     case "$help" in *--close-on-hangup*) ET_CLIENT_SUPPORT=1 ;; esac
+    case "$help" in *--ssh-option*) ET_SSH_OPTION_SUPPORT=1 ;; esac
   fi
   [ "$ET_CLIENT_SUPPORT" -eq 1 ]
 }
 
+et_client_supports_ssh_option() {
+  probe_et_client_support || true
+  [ "$ET_SSH_OPTION_SUPPORT" -eq 1 ]
+}
+
 et_client_options() {
-  local target="${1:-$host}"
+  local target="${1:-$host}" mux=() i
   ET_OPTIONS=()
-  load_host_close_on_hangup "$target" || return 0
-  if probe_et_client_support; then ET_OPTIONS=(--close-on-hangup); fi
+  if load_host_close_on_hangup "$target" && probe_et_client_support; then
+    ET_OPTIONS=(--close-on-hangup)
+  fi
+  # et starts the remote side over its own ssh call; handing it the same options
+  # sends that call through the master connection instead of a new handshake.
+  # et splits a --ssh-option value at commas, so if any value holds one, none
+  # is passed.
+  if [ "${SSH_MUX_ON:-0}" -eq 1 ] && et_client_supports_ssh_option; then
+    for (( i = 0; i + 1 < ${#SSH_CONNECT_OPTIONS[@]}; i += 2 )); do
+      [ "${SSH_CONNECT_OPTIONS[i]}" = -o ] || { mux=(); break; }
+      case "${SSH_CONNECT_OPTIONS[i + 1]}" in *,*) mux=(); break ;; esac
+      mux+=(--ssh-option "${SSH_CONNECT_OPTIONS[i + 1]}")
+    done
+    ET_OPTIONS+=(${mux[@]+"${mux[@]}"})
+  fi
   return 0
 }
 
@@ -342,6 +380,9 @@ run_doctor() {
     doctor_ok "Eternal Terminal: ${version:-installed}"
     doctor_ok "ET client path: $ET_CLIENT"
     if probe_et_client_support; then doctor_ok "et client supports --close-on-hangup"; else doctor_warn "et client lacks --close-on-hangup (or help probe failed)"; fi
+    if et_client_supports_ssh_option; then doctor_ok "et client supports --ssh-option: attaching can reuse ezet's SSH connection"
+    else doctor_warn "et client lacks --ssh-option: each attach opens a new SSH connection"
+    fi
     doctor_ok "close-on-hangup: explicit per-host opt-in; server teardown is not automatically verified"
   else
     if [ -n "${EZET_ET_BIN:-}" ]; then
@@ -399,9 +440,11 @@ run_uninstall() {
   [ -f "$EZET_HOST_ORDER_FILE" ] && printf '    host order    %s\n' "$EZET_HOST_ORDER_FILE"
   [ -f "$cfg.ezet-backup" ] && printf '    config backup %s\n' "$cfg.ezet-backup"
   printf '    No other SSH settings are touched.\n'
-  [ -d "$EZET_CONTROL_DIR" ] && printf '\n  Temp files to clean: %s (connection reuse sockets)\n' "$EZET_CONTROL_DIR"
+  if [ -d "$EZET_CONTROL_DIR" ] || [ -d "$EZET_CACHE_DIR" ]; then printf '\n'; fi
+  [ -d "$EZET_CONTROL_DIR" ] && printf '  Temp files to clean: %s (connection reuse sockets)\n' "$EZET_CONTROL_DIR"
+  [ -d "$EZET_CACHE_DIR" ] && printf '  Temp files to clean: %s (remembered remote tmux paths)\n' "$EZET_CACHE_DIR"
 
-  if [ "$removed_line" -eq 0 ] && [ ! -d "$EZET_CONTROL_DIR" ]; then
+  if [ "$removed_line" -eq 0 ] && [ ! -d "$EZET_CONTROL_DIR" ] && [ ! -d "$EZET_CACHE_DIR" ]; then
     return 0
   fi
   printf '\n  Proceed? [y/N]: '
@@ -449,6 +492,11 @@ run_uninstall() {
     rm -f "$EZET_CONTROL_DIR"/* 2>/dev/null || true
     rmdir "$EZET_CONTROL_DIR" 2>/dev/null || true
     printf '  Cleaned: connection reuse sockets\n'
+  fi
+  if [ -d "$EZET_CACHE_DIR" ]; then
+    rm -f "$EZET_CACHE_DIR"/tmux-* 2>/dev/null || true
+    rmdir "$EZET_CACHE_DIR" 2>/dev/null || true
+    printf '  Cleaned: remembered remote tmux paths\n'
   fi
   printf '\n  Done. Your host list stays at %s.\n' "$EZET_HOSTS_FILE"
   printf '  Remove the binary: %sbrew uninstall ezet%s or %srm -f %s%s\n' \
@@ -571,6 +619,8 @@ attach_session() {
   while :; do
     status=0
     started=$(date +%s)
+    # et's ssh bootstrap goes through the master too (see et_client_options).
+    if [ "$transport" = et ]; then drop_stale_ssh_master; fi
     if [ "$transport" = et ] && [ -n "$et_port" ]; then
       run_et ${ET_OPTIONS[@]+"${ET_OPTIONS[@]}"} -p "$et_port" "$host" -c "$tmux_command" || status=$?
     elif [ "$transport" = et ]; then
@@ -799,18 +849,22 @@ box_line_sel() {                  # selected row: dark grey background, column c
 #   bytes = ascii + 2*mid + 3*wide,  chars = ascii + mid + wide  ⇒  wide = (bytes-chars-mid)/2
 # Exception: … is 3 bytes but renders in 1 cell on most terminals, so its extra
 # bytes are subtracted separately.
-disp_width() {
-  local s="$1" chars bytes mid ell tmp tmp2 saved had
+# The *_v helpers leave their result in a global (DW, TR, FD, FI) instead of
+# printing it: the tables call them per cell and per character, and a $(...)
+# around each call forked a subshell every time.
+disp_width_v() {
+  local s="$1" chars bytes mid ell tmp tmp2 saved had wide
   chars=${#s}
   tmp="${s//·/}";   mid=$(( chars - ${#tmp} ))
   tmp2="${tmp//…/}"; ell=$(( ${#tmp} - ${#tmp2} ))
   had=0; [ -n "${LC_ALL+x}" ] && { had=1; saved="$LC_ALL"; }
   LC_ALL=C; bytes=${#s}
   if [ "$had" -eq 1 ]; then LC_ALL="$saved"; else unset LC_ALL; fi
-  local wide=$(( (bytes - chars - mid - 2 * ell) / 2 ))
+  wide=$(( (bytes - chars - mid - 2 * ell) / 2 ))
   [ "$wide" -lt 0 ] && wide=0
-  printf '%s' $(( chars + wide ))
+  DW=$(( chars + wide ))
 }
+disp_width() { disp_width_v "$1"; printf '%s' "$DW"; }
 # A terminal cannot shrink text, so the hint is short bright-grey text pinned to the
 # top right of the box. `← back` occupies 6 cells (arrow 1 + space 1 + word 4).
 box_corner_hint() {
@@ -820,12 +874,14 @@ box_corner_hint() {
 }
 box_line_wide() {                 # for lines with wide characters: pad by display width
   local plain="$1" rendered="$2" pad
-  pad=$(( INNER_W - 1 - $(disp_width "$plain") )); pad=$(( pad < 0 ? 0 : pad ))
+  disp_width_v "$plain"
+  pad=$(( INNER_W - 1 - DW )); pad=$(( pad < 0 ? 0 : pad ))
   printf '%s│%s  %s%*s %s│%s\n' "$BD" "$RESET" "$rendered" "$pad" "" "$BD" "$RESET"
 }
 box_line_wide_sel() {
   local plain="$1" rendered="$2" pad
-  pad=$(( INNER_W - 1 - $(disp_width "$plain") )); pad=$(( pad < 0 ? 0 : pad ))
+  disp_width_v "$plain"
+  pad=$(( INNER_W - 1 - DW )); pad=$(( pad < 0 ? 0 : pad ))
   printf '%s│%s%s› %s%*s%s %s│%s\n' "$BD" "$RESET" "$SEL" "$rendered" "$pad" "" "$RESET" "$BD" "$RESET"
 }
 row_kv() {
@@ -834,33 +890,34 @@ row_kv() {
   box_line_wide "${lbl}  $2" "${DIM}${lbl}${RESET}  ${3:-}$2${RESET}"
 }
 
-fmt_idle() {
+fmt_idle_v() {
   local s; s=$(( $1 < 0 ? -1 : $1 ))
-  if   [ "$s" -lt 0 ];     then printf '?'
-  elif [ "$s" -lt 60 ];    then printf 'now'
-  elif [ "$s" -lt 3600 ];  then printf '%dm' "$((s / 60))"
-  elif [ "$s" -lt 86400 ]; then printf '%dh' "$((s / 3600))"
-  else                          printf '%dd' "$((s / 86400))"
+  if   [ "$s" -lt 0 ];     then FI='?'
+  elif [ "$s" -lt 60 ];    then FI='now'
+  elif [ "$s" -lt 3600 ];  then FI="$((s / 60))m"
+  elif [ "$s" -lt 86400 ]; then FI="$((s / 3600))h"
+  else                          FI="$((s / 86400))d"
   fi
 }
-trunc() {
-  local s="$1" n="$2" out="" ch w=0 cw
+trunc_v() {
+  local s="$1" n="$2" out="" ch w=0 cw i
   # Cut by display width rather than character count, so wide host names cannot
   # overflow the box.
-  if [ "${#s}" -le "$n" ] && [ "$(disp_width "$s")" -le "$n" ]; then printf '%s' "$s"; return; fi
-  local i
+  disp_width_v "$s"
+  if [ "${#s}" -le "$n" ] && [ "$DW" -le "$n" ]; then TR="$s"; return 0; fi
   for (( i=0; i<${#s}; i++ )); do
     ch="${s:i:1}"
-    cw=1; [ "$(disp_width "$ch")" -eq 2 ] && cw=2
+    disp_width_v "$ch"; cw=1; [ "$DW" -eq 2 ] && cw=2
     if [ "$((w + cw))" -gt "$((n - 1))" ]; then break; fi
     out="$out$ch"; w=$((w + cw))
   done
-  printf '%s~' "$out"
+  TR="$out~"
 }
+trunc() { trunc_v "$1" "$2"; printf '%s' "$TR"; }
 # Remote path for display. Home becomes ~, and when the width is short the front is
 # cut with … so the current location (the tail) survives. If not even one parent
 # component fits, only the last name is shown.
-fmt_dir() {
+fmt_dir_v() {
   local p="$1" n="$2" s base i ch cw w=0 out=""
   # ~ stands for the remote home here: a display string, not a local path to expand.
   # shellcheck disable=SC2088
@@ -871,16 +928,18 @@ fmt_dir() {
     /root)                s='~' ;;
     *)                    s="$p" ;;
   esac
-  [ "$(disp_width "$s")" -le "$n" ] && { printf '%s' "$s"; return; }
+  disp_width_v "$s"
+  if [ "$DW" -le "$n" ]; then FD="$s"; return 0; fi
   base="${s##*/}"
-  [ "$(disp_width "$base")" -ge "$((n - 1))" ] && { trunc "$base" "$n"; return; }
+  disp_width_v "$base"
+  if [ "$DW" -ge "$((n - 1))" ]; then trunc_v "$base" "$n"; FD="$TR"; return 0; fi
   for (( i=${#s}-1; i>=0; i-- )); do
     ch="${s:i:1}"
-    cw=1; [ "$(disp_width "$ch")" -eq 2 ] && cw=2
+    disp_width_v "$ch"; cw=1; [ "$DW" -eq 2 ] && cw=2
     if [ "$((w + cw))" -gt "$((n - 1))" ]; then break; fi
     out="$ch$out"; w=$((w + cw))
   done
-  printf '…%s' "$out"
+  FD="…$out"
 }
 # Real terminal width: stty (the actual ioctl window size) first, then COLUMNS,
 # then tput, then a default.
@@ -2207,16 +2266,17 @@ pick_host() {
       fi
       # Hosts outside the ezet config cannot be edited or deleted here (read-only).
       if host_in_file "$h" "$EZET_HOSTS_FILE"; then ro=''; else ro='ro'; fi
-      printf -v hn "%-${name_w}s" "$(trunc "$h" "$name_w")"
+      trunc_v "$h" "$name_w"; printf -v hn "%-${name_w}s" "$TR"
       if [ "$wide" -eq 1 ]; then
-        printf -v hu "%-${user_w}s" "$(trunc "${RESOLVED_USER:--}" "$user_w")"
-        printf -v a  "%-${addr_w}s" "$(trunc "$a" "$addr_w")"
-        printf -v hv "%-${via_w}s" "$(trunc "$([ -n "$ro" ] && echo "$via  $ro" || echo "$via")" "$via_w")"
+        trunc_v "${RESOLVED_USER:--}" "$user_w"; printf -v hu "%-${user_w}s" "$TR"
+        trunc_v "$a" "$addr_w"; printf -v a "%-${addr_w}s" "$TR"
+        if [ -n "$ro" ]; then trunc_v "$via  $ro" "$via_w"; else trunc_v "$via" "$via_w"; fi
+        printf -v hv "%-${via_w}s" "$TR"
         HROW_PLAIN+=("${hn}  ${hu}  ${a}  ${hv}")
         HREND+=("${CY}${B}${hn}${RCF}  ${DIM}${hu}${RCF}  ${a}  ${via_c}${hv}${RCF}")
       else
         [ -n "$RESOLVED_USER" ] && a="$RESOLVED_USER@$a"
-        a="$(trunc "$a" "$addr_w")"
+        trunc_v "$a" "$addr_w"; a="$TR"
         HROW_PLAIN+=("${hn}  ${a}")
         HREND+=("${CY}${B}${hn}${RCF}  ${DIM}${a}${RCF}")
       fi
@@ -2338,7 +2398,7 @@ pick_host_text() {
 FETCH_ERROR=""; FETCH_HINT=""; REMOTE_TMUX=""; REMOTE_TMUX_SOCKET=""
 fetch_sessions() {
   local list_raw line payload rest name windows attached activity created cmd path tmux_path
-  local connected=0 no_tmux=0 tmux_exec_failed=0 bad_tmux_path=0
+  local connected=0 no_tmux=0 tmux_exec_failed=0 bad_tmux_path=0 probed=0 preamble=""
   FETCH_ERROR=""; FETCH_HINT=""; REMOTE_TMUX=""; REMOTE_TMUX_SOCKET=""
   # The script goes over stdin to `sh -s` rather than as a command argument: an
   # OpenSSH-on-Windows server whose DefaultShell is WSL bash mangles double quotes
@@ -2353,9 +2413,9 @@ fetch_sessions() {
     # Non-login SSH PATH often hides user/Homebrew installs. Compare runnable
     # versions rather than taking the first path, without requiring GNU sort -V.
     tmux_candidate() {
-      valid_tmux_path "$1" || return 0
-      version=$("$1" -V 2>/dev/null) || return 0
-      case "$version" in "tmux "*) version=${version#tmux } ;; *) return 0 ;; esac
+      valid_tmux_path "$1" || return 1
+      version=$("$1" -V 2>/dev/null) || return 1
+      case "$version" in "tmux "*) version=${version#tmux } ;; *) return 1 ;; esac
       printf "%s|%s\n" "$1" "$version"
     }
     find_tmux() {
@@ -2368,13 +2428,20 @@ fetch_sessions() {
         do
           tmux_candidate "$candidate"
         done
-        login_shell="${SHELL:-/bin/sh}"
-        case "$login_shell" in /*) ;; *) login_shell=/bin/sh ;; esac
-        [ -f "$login_shell" ] && [ -x "$login_shell" ] || login_shell=/bin/sh
-        for mode in -lc -ic; do
-          candidate=$("$login_shell" "$mode" "command -v tmux" 2>/dev/null | sed -n "/^\//{p;q;}")
-          tmux_candidate "$candidate"
-        done
+        # Starting the login and interactive shells runs the user's rc files and
+        # takes most of this script's time. For a day after such a probe, the
+        # tmux it chose stands in for them as long as it still runs.
+        if [ -n "$known_line" ]; then
+          printf "%s\n" "$known_line"
+        else
+          login_shell="${SHELL:-/bin/sh}"
+          case "$login_shell" in /*) ;; *) login_shell=/bin/sh ;; esac
+          [ -f "$login_shell" ] && [ -x "$login_shell" ] || login_shell=/bin/sh
+          for mode in -lc -ic; do
+            candidate=$("$login_shell" "$mode" "command -v tmux" 2>/dev/null | sed -n "/^\//{p;q;}")
+            tmux_candidate "$candidate"
+          done
+        fi
       } | LC_ALL=C awk -F "|" '
         $2 ~ /^[0-9]+\.[0-9]+[a-z]*(-next)?$/ {
           split($2, parts, ".")
@@ -2390,6 +2457,16 @@ fetch_sessions() {
     }
 
     printf "__DT_CONNECTED__\n"
+    now=$(date +%s)
+    # ezet prepends known_tmux and known_at (when its probe ran) for a host whose
+    # tmux it remembers.
+    known_line=""
+    case "${known_at:-}" in
+      ""|*[!0-9]*) ;;
+      *) if [ "$now" -ge "$known_at" ] && [ $((now - known_at)) -lt 86400 ]; then
+           known_line=$(tmux_candidate "${known_tmux:-}") || known_line=""
+         fi ;;
+    esac
     selected=$(find_tmux)
     if [ -z "$selected" ]; then
       printf "__DT_NO_TMUX__\n"
@@ -2400,10 +2477,12 @@ fetch_sessions() {
     tmux_socket="ezet-$tmux_version"
     printf "__DT_TMUX__=%s\n" "$tmux_bin"
     printf "__DT_TMUX_SOCKET__=%s\n" "$tmux_socket"
-    printf "__DT_NOW__=%s\n" "$(date +%s)"
+    [ -n "$known_line" ] || printf "__DT_TMUX_PROBED__\n"
+    printf "__DT_NOW__=%s\n" "$now"
     "$tmux_bin" -L "$tmux_socket" list-sessions -F "__DT_SESSION__|#{session_name}|#{session_windows}|#{?session_attached,attached,}|#{session_activity}|#{session_created}|#{pane_current_command}|#{pane_current_path}" 2>/dev/null || true
 FETCH_SCRIPT
-  if ! list_raw=$(printf '%s' "$fetch_script" | remote_ssh "$host" sh -s 2>&1); then
+  if tmux_cache_read; then preamble="known_tmux='$KNOWN_TMUX' known_at=$KNOWN_AT"$'\n'; fi
+  if ! list_raw=$(printf '%s%s' "$preamble" "$fetch_script" | remote_ssh "$host" sh -s 2>&1); then
     # SSH itself failed. The underlying cause comes from the ssh diagnostic (its
     # wording is fixed English).
     case "$list_raw" in
@@ -2437,6 +2516,7 @@ FETCH_SCRIPT
         __DT_CONNECTED__) connected=1 ;;
         __DT_NO_TMUX__) no_tmux=1 ;;
         __DT_TMUX_EXEC_FAILED__) tmux_exec_failed=1 ;;
+        __DT_TMUX_PROBED__) probed=1 ;;
         __DT_TMUX__=*)
           tmux_path="${line#__DT_TMUX__=}"
           if valid_remote_tmux_path "$tmux_path"; then REMOTE_TMUX="$tmux_path"
@@ -2509,6 +2589,40 @@ FETCH_SCRIPT
     FETCH_HINT="Check the remote tmux path, or connect with the SSH row below."
     return 1
   fi
+  tmux_cache_update "$probed"
+  return 0
+}
+
+# The tmux a host's session query settled on, kept so the next query can skip
+# the slow login/interactive shell probes (see the fetch script). One line per
+# host: "<remote time of the last full probe> <tmux path>".
+KNOWN_TMUX=""; KNOWN_AT=""
+tmux_cache_read() {
+  local file="$EZET_CACHE_DIR/tmux-$host" at="" path=""
+  KNOWN_TMUX=""; KNOWN_AT=""
+  [ -f "$file" ] || return 1
+  read -r at path < "$file" || [ -n "$path" ] || return 1
+  case "$at" in ''|*[!0-9]*) return 1 ;; esac
+  [ "${#at}" -le 12 ] || return 1
+  valid_remote_tmux_path "$path" || return 1
+  KNOWN_AT="$at"; KNOWN_TMUX="$path"
+}
+# A full probe restarts the day; a quick query that settled on another tmux
+# (say a newer one in a standard place) keeps the time of the last full probe.
+tmux_cache_update() {
+  local at file tmp
+  if [ "$1" -eq 1 ]; then at="$now"
+  elif [ "$REMOTE_TMUX" != "$KNOWN_TMUX" ]; then at="$KNOWN_AT"
+  else return 0
+  fi
+  case "$at" in ''|0|*[!0-9]*) return 0 ;; esac
+  file="$EZET_CACHE_DIR/tmux-$host"; tmp="$file.$$"
+  mkdir -p "$EZET_CACHE_DIR" 2>/dev/null || return 0
+  if { printf '%s %s\n' "$at" "$REMOTE_TMUX" > "$tmp"; } 2>/dev/null && mv -f "$tmp" "$file" 2>/dev/null; then
+    KNOWN_AT="$at"; KNOWN_TMUX="$REMOTE_TMUX"
+  else
+    rm -f "$tmp" 2>/dev/null || true
+  fi
   return 0
 }
 
@@ -2535,21 +2649,22 @@ build_session_rows() {
     # DIR shows the path with home shortened to ~, not just the last component.
     k=0
     while [ "$k" -lt "$count" ]; do
-      dirs[k]=$(fmt_dir "${paths[$k]}" "$DIR_W")
+      fmt_dir_v "${paths[$k]}" "$DIR_W"; dirs[k]="$FD"
       k=$((k + 1))
     done
     if [ "$show_age" -eq 1 ]; then
-      TH_PLAIN=$(printf "%-19s  %-4s  %-8s  %-6s  %-6s  %-12s  %s" \
-                 "TMUX ($count)" 'WIN' 'STATUS' 'IDLE' 'AGE' 'CMD' 'DIR')
+      printf -v TH_PLAIN "%-19s  %-4s  %-8s  %-6s  %-6s  %-12s  %s" \
+        "TMUX ($count)" 'WIN' 'STATUS' 'IDLE' 'AGE' 'CMD' 'DIR'
     else
-      TH_PLAIN=$(printf "%-19s  %-4s  %-8s  %-6s  %-12s  %s" \
-                 "TMUX ($count)" 'WIN' 'STATUS' 'IDLE' 'CMD' 'DIR')
+      printf -v TH_PLAIN "%-19s  %-4s  %-8s  %-6s  %-12s  %s" \
+        "TMUX ($count)" 'WIN' 'STATUS' 'IDLE' 'CMD' 'DIR'
     fi
   else
     # A narrow window keeps only the essentials, so nothing scrolls sideways.
     set_box_width "$max_inner"
     name_w=$((max_inner - 14)); [ "$name_w" -lt 6 ] && name_w=6
-    TH_PLAIN=$(printf "%-${name_w}s  %-3s  %-6s" "$(trunc "TMUX ($count)" "$name_w")" 'ST' 'IDLE')
+    trunc_v "TMUX ($count)" "$name_w"
+    printf -v TH_PLAIN "%-${name_w}s  %-3s  %-6s" "$TR" 'ST' 'IDLE'
   fi
 
   k=0
@@ -2565,14 +2680,14 @@ build_session_rows() {
     else                               ic="$RED"
     fi
     if [ "$cols" -ge 72 ]; then
-      printf -v c_n '%-19s'  "$(trunc "${names[$k]}" 19)"
+      trunc_v "${names[$k]}" 19; printf -v c_n '%-19s' "$TR"
       printf -v c_w '%-4s'   "${wins[$k]}w"
       printf -v c_s '%-8s'   "$st"
-      printf -v c_e '%-6s'   "$(fmt_idle "$idle_s")"
-      printf -v c_c '%-12s'  "$(trunc "${cmds[$k]}" 12)"
+      fmt_idle_v "$idle_s"; printf -v c_e '%-6s' "$FI"
+      trunc_v "${cmds[$k]}" 12; printf -v c_c '%-12s' "$TR"
       printf -v c_d "%-${DIR_W}s"  "${dirs[$k]}"
       if [ "$show_age" -eq 1 ]; then
-        printf -v c_a '%-6s' "$(fmt_idle "$age_s")"
+        fmt_idle_v "$age_s"; printf -v c_a '%-6s' "$FI"
         ROW_PLAIN+=("${c_n}  ${c_w}  ${c_s}  ${c_e}  ${c_a}  ${c_c}  ${c_d}")
         ROW_REND+=("${CY}${B}${c_n}${RCF}  ${DIM}${c_w}${RCF}  ${sc}${c_s}${RCF}  ${ic}${c_e}${RCF}  ${DIM}${c_a}${RCF}  ${YE}${c_c}${RCF}  ${DIM}${c_d}${RCF}")
       else
@@ -2580,9 +2695,9 @@ build_session_rows() {
         ROW_REND+=("${CY}${B}${c_n}${RCF}  ${DIM}${c_w}${RCF}  ${sc}${c_s}${RCF}  ${ic}${c_e}${RCF}  ${YE}${c_c}${RCF}  ${DIM}${c_d}${RCF}")
       fi
     else
-      printf -v c_n "%-${name_w}s" "$(trunc "${names[$k]}" "$name_w")"
+      trunc_v "${names[$k]}" "$name_w"; printf -v c_n "%-${name_w}s" "$TR"
       printf -v c_s '%-3s' "$([ -n "${atts[$k]}" ] && echo on || echo -)"
-      printf -v c_e '%-6s' "$(fmt_idle "$idle_s")"
+      fmt_idle_v "$idle_s"; printf -v c_e '%-6s' "$FI"
       ROW_PLAIN+=("${c_n}  ${c_s}  ${c_e}")
       ROW_REND+=("${CY}${B}${c_n}${RCF}  ${sc}${c_s}${RCF}  ${ic}${c_e}${RCF}")
     fi
@@ -2653,9 +2768,9 @@ draw_sessions() {
     app_header 'TMUX SESSIONS'
     box_corner_hint "← back"
     box_top
-    row_kv 'HOST' "$(trunc "$host" "$value_w")" "${CY}${B}"
-    row_kv 'ADDR' "$(trunc "$addr" "$value_w")" "$B"
-    row_kv 'VIA'  "$(trunc "$via" "$value_w")" "$YE"
+    trunc_v "$host" "$value_w"; row_kv 'HOST' "$TR" "${CY}${B}"
+    trunc_v "$addr" "$value_w"; row_kv 'ADDR' "$TR" "$B"
+    trunc_v "$via" "$value_w";  row_kv 'VIA'  "$TR" "$YE"
     box_mid
     if [ "$FILTER_SEARCHABLE" -eq 1 ]; then
       draw_search_row "session name, command or path"
@@ -2766,6 +2881,10 @@ else
 fi
 
 valid_name "$host" || { echo "ezet: invalid host name (letters/digits/._- only): $host" >&2; exit 2; }
+
+# drop_stale_ssh_master needs the control socket path wherever the wake time is
+# known; look it up once here so the subshells that run remote_ssh inherit it.
+if [ "$SSH_MUX_ON" -eq 1 ] && [ -n "$(last_wake_time)" ]; then mux_socket_path || true; fi
 
 # Two arguments: an explicit session name connects straight away and exits
 if [ "$#" -eq 2 ]; then

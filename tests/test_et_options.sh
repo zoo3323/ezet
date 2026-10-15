@@ -20,7 +20,8 @@ if [ "${1:-}" = --help ]; then
     printf '%s\n' "$((count + 1))" > "$EZET_HELP_COUNT_FILE"
   fi
   case "${EZET_HELP_KIND:-supported}" in
-    supported) printf '%s\n' '  --close-on-hangup  terminate the remote session' ;;
+    supported) printf '%s\n' '  --close-on-hangup  terminate the remote session' '  --ssh-option arg   Options to pass down to `ssh -o`' ;;
+    closeonly) printf '%s\n' '  --close-on-hangup  terminate the remote session' ;;
     old) printf '%s\n' '  --version  print version' ;;
     failed) printf '%s\n' '--close-on-hangup' >&2; exit 7 ;;
     long) printf '%s\n' '--close-on-hangup'; awk 'BEGIN { for (i=0; i<200000; i++) print "help text" }' ;;
@@ -152,7 +153,61 @@ helper_section=$(awk '/^# ── ET client options/{on=1} on && /^doctor_file_mo
   et_client_options opted
   [ "${#ET_OPTIONS[@]}" -eq 1 ]
   [ "$(awk 'NR==1 {print; exit}' "$helper_count")" = 1 ]
+
+  # With connection reuse on, every -o option goes to et's ssh bootstrap too.
+  SSH_MUX_ON=1
+  SSH_CONNECT_OPTIONS=(-o ConnectTimeout=5 -o ControlMaster=auto -o "ControlPath=/tmp/cm/%C")
+  et_client_options plain
+  [ "${ET_OPTIONS[*]}" = "--ssh-option ConnectTimeout=5 --ssh-option ControlMaster=auto --ssh-option ControlPath=/tmp/cm/%C" ] ||
+    { printf 'mux options for et: %s\n' "${ET_OPTIONS[*]}" >&2; exit 1; }
+  et_client_options opted
+  [ "${ET_OPTIONS[0]}" = --close-on-hangup ] && [ "${#ET_OPTIONS[@]}" -eq 7 ] ||
+    { printf 'close-on-hangup plus mux options: %s\n' "${ET_OPTIONS[*]}" >&2; exit 1; }
+  # et splits option values at commas: pass nothing rather than a broken path.
+  SSH_CONNECT_OPTIONS=(-o ConnectTimeout=5 -o "ControlPath=/tmp/c,m/%C")
+  et_client_options plain
+  [ "${#ET_OPTIONS[@]}" -eq 0 ] || { printf 'comma value must not reach et\n' >&2; exit 1; }
+  SSH_MUX_ON=0
+  SSH_CONNECT_OPTIONS=(-o ControlMaster=auto)
+  et_client_options plain
+  [ "${#ET_OPTIONS[@]}" -eq 0 ] || { printf 'mux off must pass nothing\n' >&2; exit 1; }
 )
+# shellcheck disable=SC2034  # SSH_MUX_ON and SSH_CONNECT_OPTIONS are read by the evaluated helpers
+(
+  EZET_HOSTS_FILE="$tmp/.ssh/config.d/ezet"
+  EZET_DATA_DIR="$tmp/data"
+  EZET_HELP_KIND=closeonly
+  EZET_ET_LOG="$tmp/helper-et.log"
+  PATH="$tmp/bin:/usr/bin:/bin"
+  export EZET_HOSTS_FILE EZET_DATA_DIR EZET_HELP_KIND EZET_ET_LOG PATH
+  eval "$helper_section"
+  # An et without --ssh-option keeps opening its own connection.
+  SSH_MUX_ON=1
+  SSH_CONNECT_OPTIONS=(-o ControlMaster=auto)
+  et_client_options opted
+  [ "${ET_OPTIONS[*]}" = --close-on-hangup ] || { printf 'old et got mux options: %s\n' "${ET_OPTIONS[*]}" >&2; exit 1; }
+)
+
+# End to end with connection reuse on: the et call carries the master options
+# ahead of -p, so its ssh bootstrap goes through the master ezet already holds.
+mux_dir=$(mktemp -d /tmp/ezetmux.XXXXXX)
+mux_log="$tmp/mux-et.log"
+: > "$mux_log"
+EZET_ET_LOG="$mux_log" EZET_HELP_KIND=supported HOME="$tmp" PATH="$tmp/bin:/usr/bin:/bin" \
+  EZET_CONTROL_DIR="$mux_dir/cm" "$ROOT/bin/ezet" opted probe >/dev/null 2>&1 ||
+  { printf 'ezet failed with connection reuse on\n' >&2; exit 1; }
+if ! awk -v cp="ControlPath=$mux_dir/cm/%C" '
+  { a[++n]=$0 }
+  END {
+    for (i=1; i<=n; i++) if (a[i]=="-p") p=i
+    for (i=1; i<p; i++) if (a[i]=="--ssh-option") o[a[i+1]]=1
+    exit !(p && o["ControlMaster=auto"] && o[cp] && o["ControlPersist=30m"])
+  }' "$mux_log"; then
+  printf 'et must get the connection reuse options before -p:\n' >&2
+  cat "$mux_log" >&2
+  exit 1
+fi
+rm -rf "$mux_dir"
 
 # Doctor reports local capability plus the opt-in policy; it does not claim to
 # have checked the selected host or the remote server.
