@@ -161,8 +161,9 @@ helper_section=$(awk '/^# ── ET client options/{on=1} on && /^doctor_file_mo
   [ "${ET_OPTIONS[*]}" = "--ssh-option ConnectTimeout=5 --ssh-option ControlMaster=auto --ssh-option ControlPath=/tmp/cm/%C" ] ||
     { printf 'mux options for et: %s\n' "${ET_OPTIONS[*]}" >&2; exit 1; }
   et_client_options opted
-  [ "${ET_OPTIONS[0]}" = --close-on-hangup ] && [ "${#ET_OPTIONS[@]}" -eq 7 ] ||
-    { printf 'close-on-hangup plus mux options: %s\n' "${ET_OPTIONS[*]}" >&2; exit 1; }
+  if [ "${ET_OPTIONS[0]}" != --close-on-hangup ] || [ "${#ET_OPTIONS[@]}" -ne 7 ]; then
+    printf 'close-on-hangup plus mux options: %s\n' "${ET_OPTIONS[*]}" >&2; exit 1
+  fi
   # et splits option values at commas: pass nothing rather than a broken path.
   SSH_CONNECT_OPTIONS=(-o ConnectTimeout=5 -o "ControlPath=/tmp/c,m/%C")
   et_client_options plain
