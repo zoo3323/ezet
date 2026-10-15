@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SSH multiplexing: enabled when the expanded control socket path fits, kept for
-# EZET_SSH_PERSIST, and a master opened before the machine last woke is closed
+# EZET_SSH_PERSIST, and a master opened before the machine last woke is retired
 # before the next ssh. The functions are evaluated straight from bin/ezet.
 # shellcheck disable=SC2016  # the bash -c bodies are single-quoted on purpose
 set -euo pipefail
@@ -23,6 +23,7 @@ for arg in "$@"; do
 done
 for arg in "$@"; do
   if [ "$arg" = -G ]; then
+    printf '%s\n' "$*" >> "$SSH_LOG.G"
     [ -z "$control" ] || printf 'controlpath %s\n' "${control//%C/2fe96e4641955581babe8992e837f186c203da85}"
     exit 0
   fi
@@ -85,10 +86,29 @@ stale() {
 
 python3 -c 'import socket, sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "$socket"
 [ -S "$socket" ] || fail 'test socket'
-case "$(stale 100)" in *"-O exit box"*) ;; *) fail 'master from before the last wake is closed' "$(stale 100)" ;; esac
+# stop, not exit: running sessions on that master (another tab's attach) finish.
+case "$(stale 100)" in *"-O stop box"*) ;; *) fail 'master from before the last wake is retired' "$(stale 100)" ;; esac
 [ -z "$(stale -100)" ] || fail 'master opened after the last wake is kept'
 rm -f "$socket"
 [ -z "$(stale 100)" ] || fail 'no socket, nothing to close'
+
+# The socket path is looked up once per host; later calls (and the command
+# substitutions that inherit it) reuse it.
+python3 -c 'import socket, sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "$socket"
+: > "$SSH_LOG.G"
+EZET_CONTROL_DIR="$tmp/cm" bash -c '
+  set -euo pipefail
+  SSH_CONNECT_OPTIONS=(-o ConnectTimeout=5)
+  host=box
+  eval "$1"
+  setup_multiplexing
+  : > "$SSH_LOG.G"
+  last_wake_time() { echo 1; }
+  mux_socket_path
+  drop_stale_ssh_master; drop_stale_ssh_master
+  ( drop_stale_ssh_master )' _ "$section"
+[ "$(grep -c -- ' box$' "$SSH_LOG.G")" = 1 ] || fail 'socket path looked up once' "$(cat "$SSH_LOG.G")"
+rm -f "$socket"
 
 # remote_ssh adds the shared options in front of the caller's arguments.
 : > "$SSH_LOG"
